@@ -1,0 +1,1 @@
+- [ELA Blue Puck T integration](ela-ble-integration.md) — AppSettings moved to types/sensor.ts; storageService re-exports it; storage keys bumped to v2.

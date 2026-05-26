@@ -1,0 +1,2738 @@
+diff --git a/src/components/AddSensorModal.tsx b/src/components/AddSensorModal.tsx
+index f30845f..4fd7088 100644
+--- a/src/components/AddSensorModal.tsx
++++ b/src/components/AddSensorModal.tsx
+@@ -1,12 +1,33 @@
++// ============================================================
++// AddSensorModal.tsx — dodawanie czujników ELA Blue Puck T
++// ============================================================
++
+ import { useState } from "react";
+-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
++import {
++  Dialog, DialogContent, DialogDescription, DialogFooter,
++  DialogHeader, DialogTitle,
++} from "@/components/ui/dialog";
+ import { Button } from "@/components/ui/button";
+ import { Input } from "@/components/ui/input";
+ import { Label } from "@/components/ui/label";
+-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
++import {
++  Select, SelectContent, SelectItem,
++  SelectTrigger, SelectValue,
++} from "@/components/ui/select";
+ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+-import { Bluetooth, Info, Loader2 } from "lucide-react";
+-import { isBluetoothAvailable, scanForSensor, type BluetoothDeviceLike } from "@/services/bluetoothService";
++import { Badge } from "@/components/ui/badge";
++import {
++  Bluetooth, Info, Loader2, Thermometer,
++  Wifi, WifiOff, BatteryMedium, Radio,
++} from "lucide-react";
++import {
++  isBluetoothAvailable,
++  isAdvertisementScanSupported,
++  scanForELADevice,
++  scanForSensor,
++  detectELAProfile,
++  type BluetoothDeviceLike,
++} from "@/services/bluetoothService";
+ import { sensorProfiles } from "@/services/sensorProfiles";
+ import { upsertSensor } from "@/services/storageService";
+ import type { Sensor } from "@/types/sensor";
+@@ -18,57 +39,153 @@ interface AddSensorModalProps {
+   onAdded?: () => void;
+ }
+ 
+-const COMMON_ROOMS = ["Salon", "Sypialnia", "Kuchnia", "Łazienka", "Garaż", "Kotłownia", "Poddasze", "Biuro"];
++const COMMON_ROOMS = [
++  "Salon", "Sypialnia", "Kuchnia", "Łazienka",
++  "Garaż", "Kotłownia", "Poddasze", "Biuro",
++  "Piwnica", "Korytarz",
++];
++
++type Step = "select-mode" | "scan" | "ela-scan" | "configure";
++type ScanMode = "ela" | "gatt";
++
++interface LiveData {
++  temperature?: number;
++  battery?: number;
++  rssi?: number;
++}
+ 
+ export function AddSensorModal({ open, onOpenChange, onAdded }: AddSensorModalProps) {
+-  const [step, setStep] = useState<"scan" | "configure">("scan");
++  const [step, setStep] = useState<Step>("select-mode");
++  const [scanMode, setScanMode] = useState<ScanMode>("ela");
+   const [scanning, setScanning] = useState(false);
+   const [device, setDevice] = useState<BluetoothDeviceLike | null>(null);
++  const [liveData, setLiveData] = useState<LiveData>({});
+   const [roomName, setRoomName] = useState("Salon");
+   const [customName, setCustomName] = useState("");
+-  const [profileId, setProfileId] = useState<string>(sensorProfiles[0].id);
++  const [profileId, setProfileId] = useState("ela-blue-puck-t");
+   const [error, setError] = useState<string | null>(null);
++  const [elaSupported, setElaSupported] = useState<boolean | null>(null);
+ 
+   const reset = () => {
+-    setStep("scan"); setDevice(null); setRoomName("Salon");
+-    setCustomName(""); setProfileId(sensorProfiles[0].id); setError(null);
++    setStep("select-mode");
++    setDevice(null);
++    setLiveData({});
++    setRoomName("Salon");
++    setCustomName("");
++    setProfileId("ela-blue-puck-t");
++    setError(null);
+   };
+ 
+-  const handleScan = async () => {
++  const handleModeSelect = async (mode: ScanMode) => {
++    setScanMode(mode);
++    const btOk = await isBluetoothAvailable();
++    if (!btOk) {
++      setError("Web Bluetooth niedostępne. Użyj Chrome/Edge na desktopie lub Androidzie.");
++      return;
++    }
++    if (mode === "ela") {
++      const adSupported = isAdvertisementScanSupported();
++      setElaSupported(adSupported);
++      setStep("ela-scan");
++    } else {
++      setStep("scan");
++    }
++  };
++
++  // ── ELA Advertisement scan ──────────────────────────────
++
++  const handleELAScan = async () => {
+     setError(null);
+     setScanning(true);
+     try {
+-      const available = await isBluetoothAvailable();
+-      if (!available) {
+-        setError("Web Bluetooth nie jest dostępne w tej przeglądarce. Włącz tryb demo lub użyj Chrome/Edge na desktopie/Androidzie.");
+-        return;
++      let gotData = false;
++      const dev = await scanForELADevice({
++        onDeviceFound: (foundDevice, data) => {
++          if (!gotData) {
++            gotData = true;
++            setDevice(foundDevice);
++            setLiveData({
++              temperature: data.temperature,
++              battery: data.battery,
++              rssi: data.rssi,
++            });
++            // Auto-detect profilu
++            const detectedProfile = detectELAProfile(foundDevice.name);
++            if (detectedProfile) setProfileId(detectedProfile);
++            setStep("configure");
++          }
++        },
++        onError: (e) => setError(e.message),
++      });
++
++      if (dev && !gotData) {
++        // Urządzenie znalezione ale nie otrzymano jeszcze danych advertisement
++        setDevice(dev);
++        const detectedProfile = detectELAProfile(dev.name);
++        if (detectedProfile) setProfileId(detectedProfile);
++        setStep("configure");
++      }
++    } catch (e) {
++      const msg = e instanceof Error ? e.message : "Błąd skanowania.";
++      if (msg.includes("cancelled") || msg.includes("User cancelled")) {
++        setError(null); // Użytkownik anulował — OK
++      } else {
++        setError(msg);
+       }
++    } finally {
++      setScanning(false);
++    }
++  };
++
++  // ── GATT scan (inne czujniki) ──────────────────────────
++
++  const handleGATTScan = async () => {
++    setError(null);
++    setScanning(true);
++    try {
+       const dev = await scanForSensor();
+       if (dev) {
+         setDevice(dev);
++        const detectedProfile = detectELAProfile(dev.name);
++        setProfileId(detectedProfile ?? sensorProfiles.find((p) => p.source === "gatt")?.id ?? "gatt-ess-temperature");
+         setStep("configure");
+       }
+     } catch (e) {
+-      const msg = e instanceof Error ? e.message : "Nie udało się zeskanować urządzeń.";
+-      setError(msg);
++      const msg = e instanceof Error ? e.message : "Błąd skanowania.";
++      if (!msg.includes("cancelled") && !msg.includes("User cancelled")) {
++        setError(msg);
++      }
+     } finally {
+       setScanning(false);
+     }
+   };
+ 
++  // ── Zapisz czujnik ─────────────────────────────────────
++
+   const handleSave = () => {
+     if (!device) return;
++    const selectedProfile = sensorProfiles.find((p) => p.id === profileId);
++    const isELA = selectedProfile?.source === "advertisement";
++
+     const sensor: Sensor = {
+       id: device.id,
+-      bluetoothName: device.name || "Nieznane urządzenie",
++      bluetoothName: device.name || "Blue Puck T",
+       deviceId: device.id,
+       roomName,
+       customName: customName || undefined,
+       profileId,
+-      status: "disconnected",
++      status: "connected",
++      source: isELA ? "ela-advertisement" : "gatt",
++      lastTemperature: liveData.temperature,
++      lastReadAt: liveData.temperature ? new Date().toISOString() : undefined,
++      batteryLevel: liveData.battery,
++      lastRssi: liveData.rssi,
++      minTempAlert: 5,
++      maxTempAlert: 30,
+     };
++
+     upsertSensor(sensor);
+-    toast.success(`Dodano czujnik w pomieszczeniu „${roomName}”.`);
++    toast.success(`Dodano czujnik ELA w pomieszczeniu „${roomName}".`);
+     onAdded?.();
+     onOpenChange(false);
+     reset();
+@@ -78,43 +195,174 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: AddSensorModalPr
+     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
+       <DialogContent className="sm:max-w-md">
+         <DialogHeader>
+-          <DialogTitle>Dodaj czujnik Bluetooth</DialogTitle>
++          <DialogTitle className="flex items-center gap-2">
++            <Bluetooth className="h-5 w-5 text-primary" />
++            Dodaj czujnik BLE
++          </DialogTitle>
+           <DialogDescription>
+-            {step === "scan"
+-              ? "Kliknij „Skanuj”, aby wyszukać czujniki Bluetooth Low Energy w pobliżu."
+-              : "Skonfiguruj wykryte urządzenie i przypisz je do pomieszczenia."}
++            {step === "select-mode" && "Wybierz typ czujnika do dodania."}
++            {step === "ela-scan" && "Kliknij Skanuj — wybierz Blue Puck T z listy urządzeń."}
++            {step === "scan" && "Kliknij Skanuj — wybierz czujnik GATT z listy."}
++            {step === "configure" && "Skonfiguruj i przypisz czujnik do pomieszczenia."}
+           </DialogDescription>
+         </DialogHeader>
+ 
+-        {step === "scan" && (
++        {/* ── Wybór trybu ── */}
++        {step === "select-mode" && (
++          <div className="space-y-3">
++            <button
++              onClick={() => handleModeSelect("ela")}
++              className="w-full rounded-xl border-2 border-primary/30 bg-primary/5 p-4 text-left transition-all hover:border-primary hover:bg-primary/10"
++            >
++              <div className="flex items-center gap-3">
++                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/15">
++                  <Radio className="h-5 w-5 text-primary" />
++                </div>
++                <div>
++                  <div className="font-semibold">ELA Blue Puck T</div>
++                  <div className="text-xs text-muted-foreground">
++                    Advertisement BLE — bez parowania, tylko temperatura
++                  </div>
++                </div>
++                <Badge className="ml-auto" variant="secondary">Zalecane</Badge>
++              </div>
++            </button>
++
++            <button
++              onClick={() => handleModeSelect("gatt")}
++              className="w-full rounded-xl border border-border p-4 text-left transition-all hover:border-border/80 hover:bg-accent/50"
++            >
++              <div className="flex items-center gap-3">
++                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
++                  <Bluetooth className="h-5 w-5 text-muted-foreground" />
++                </div>
++                <div>
++                  <div className="font-semibold">Inny czujnik GATT</div>
++                  <div className="text-xs text-muted-foreground">
++                    Xiaomi, ESP32, standardowe GATT Health Thermometer
++                  </div>
++                </div>
++              </div>
++            </button>
++
++            {error && (
++              <Alert variant="destructive">
++                <AlertDescription>{error}</AlertDescription>
++              </Alert>
++            )}
++          </div>
++        )}
++
++        {/* ── ELA scan ── */}
++        {step === "ela-scan" && (
+           <div className="space-y-4">
+-            <Alert>
+-              <Info className="h-4 w-4" />
+-              <AlertTitle>Identyfikator urządzenia</AlertTitle>
++            {elaSupported === false && (
++              <Alert>
++                <Info className="h-4 w-4" />
++                <AlertTitle>Włącz eksperymentalny tryb BLE</AlertTitle>
++                <AlertDescription className="text-xs space-y-1">
++                  <p>Blue Puck T wymaga Advertisement Scanning. Włącz w Chrome:</p>
++                  <code className="block rounded bg-muted px-2 py-1 font-mono text-xs">
++                    chrome://flags/#enable-web-bluetooth-scanning
++                  </code>
++                  <p>Następnie uruchom ponownie Chrome i wróć tutaj.</p>
++                </AlertDescription>
++              </Alert>
++            )}
++
++            <Alert className="border-primary/30 bg-primary/5">
++              <Radio className="h-4 w-4 text-primary" />
++              <AlertTitle className="text-sm">Jak to działa</AlertTitle>
+               <AlertDescription className="text-xs">
+-                Niektóre przeglądarki i telefony mogą nie udostępniać adresu MAC urządzenia Bluetooth.
+-                W takim przypadku aplikacja użyje bezpiecznego identyfikatora device.id.
++                Blue Puck T nadaje dane przez BLE Advertisement co ~1 sekundę.
++                Aplikacja odbiera te pakiety <strong>bez trwałego połączenia</strong> — bateria
++                czujnika zostaje nienaruszona. Upewnij się, że czujnik jest w pobliżu (do 30m).
+               </AlertDescription>
+             </Alert>
++
+             {error && (
+               <Alert variant="destructive">
+                 <AlertDescription>{error}</AlertDescription>
+               </Alert>
+             )}
+-            <Button onClick={handleScan} disabled={scanning} className="w-full" size="lg">
+-              {scanning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Bluetooth className="mr-2 h-4 w-4" />}
+-              {scanning ? "Skanowanie..." : "Skanuj urządzenia"}
++
++            <Button
++              onClick={handleELAScan}
++              disabled={scanning}
++              className="w-full"
++              size="lg"
++            >
++              {scanning ? (
++                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Skanowanie…</>
++              ) : (
++                <><Radio className="mr-2 h-4 w-4" /> Skanuj Blue Puck T</>
++              )}
+             </Button>
+           </div>
+         )}
+ 
++        {/* ── GATT scan ── */}
++        {step === "scan" && (
++          <div className="space-y-4">
++            {error && (
++              <Alert variant="destructive">
++                <AlertDescription>{error}</AlertDescription>
++              </Alert>
++            )}
++            <Button onClick={handleGATTScan} disabled={scanning} className="w-full" size="lg">
++              {scanning ? (
++                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Skanowanie…</>
++              ) : (
++                <><Bluetooth className="mr-2 h-4 w-4" /> Skanuj urządzenia GATT</>
++              )}
++            </Button>
++          </div>
++        )}
++
++        {/* ── Konfiguracja ── */}
+         {step === "configure" && device && (
+           <div className="space-y-4">
+-            <div className="rounded-lg border bg-muted/40 p-3 text-sm">
+-              <div className="font-medium">{device.name || "Bez nazwy"}</div>
+-              <div className="text-xs text-muted-foreground">ID: {device.id}</div>
++            {/* Karta wykrytego urządzenia */}
++            <div className="rounded-xl border bg-muted/40 p-3">
++              <div className="flex items-start justify-between">
++                <div>
++                  <div className="font-semibold text-sm">{device.name || "Blue Puck T"}</div>
++                  <div className="text-xs text-muted-foreground font-mono mt-0.5">{device.id}</div>
++                </div>
++                {liveData.temperature !== undefined ? (
++                  <div className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-primary">
++                    <Thermometer className="h-4 w-4" />
++                    <span className="font-bold text-sm">{liveData.temperature.toFixed(1)}°C</span>
++                  </div>
++                ) : (
++                  <Badge variant="outline">Oczekiwanie na dane</Badge>
++                )}
++              </div>
++
++              {/* Meta dane ELA */}
++              {(liveData.battery !== undefined || liveData.rssi !== undefined) && (
++                <div className="mt-2 flex gap-3 text-xs text-muted-foreground">
++                  {liveData.battery !== undefined && (
++                    <span className="flex items-center gap-1">
++                      <BatteryMedium className="h-3.5 w-3.5" />
++                      {liveData.battery}%
++                    </span>
++                  )}
++                  {liveData.rssi !== undefined && (
++                    <span className="flex items-center gap-1">
++                      {liveData.rssi > -70 ? (
++                        <Wifi className="h-3.5 w-3.5 text-ok" />
++                      ) : (
++                        <WifiOff className="h-3.5 w-3.5 text-destructive" />
++                      )}
++                      RSSI: {liveData.rssi} dBm
++                    </span>
++                  )}
++                </div>
++              )}
+             </div>
+ 
++            {/* Pomieszczenie */}
+             <div className="space-y-2">
+               <Label>Pomieszczenie</Label>
+               <Select value={roomName} onValueChange={setRoomName}>
+@@ -124,24 +372,35 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: AddSensorModalPr
+                 </SelectContent>
+               </Select>
+               <Input
+-                placeholder="Lub wpisz własną nazwę"
++                placeholder="Lub wpisz własną nazwę pomieszczenia"
+                 value={roomName}
+                 onChange={(e) => setRoomName(e.target.value)}
+               />
+             </div>
+ 
++            {/* Opis */}
+             <div className="space-y-2">
+               <Label>Opis (opcjonalnie)</Label>
+-              <Input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="np. obok pieca" />
++              <Input
++                value={customName}
++                onChange={(e) => setCustomName(e.target.value)}
++                placeholder="np. przy oknie, nad drzwiami"
++              />
+             </div>
+ 
++            {/* Profil */}
+             <div className="space-y-2">
+-              <Label>Profil czujnika</Label>
++              <Label>Profil dekodowania</Label>
+               <Select value={profileId} onValueChange={setProfileId}>
+                 <SelectTrigger><SelectValue /></SelectTrigger>
+                 <SelectContent>
+                   {sensorProfiles.map((p) => (
+-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
++                    <SelectItem key={p.id} value={p.id}>
++                      <div className="flex items-center gap-2">
++                        {p.id}
++                        {p.id === profileId && <Badge variant="secondary" className="text-xs">Auto</Badge>}
++                      </div>
++                    </SelectItem>
+                   ))}
+                 </SelectContent>
+               </Select>
+@@ -149,9 +408,16 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: AddSensorModalPr
+           </div>
+         )}
+ 
+-        <DialogFooter>
++        <DialogFooter className="gap-2">
+           <Button variant="ghost" onClick={() => onOpenChange(false)}>Anuluj</Button>
+-          {step === "configure" && <Button onClick={handleSave}>Zapisz czujnik</Button>}
++          {step !== "select-mode" && step !== "configure" && (
++            <Button variant="outline" onClick={() => setStep("select-mode")}>Wstecz</Button>
++          )}
++          {step === "configure" && (
++            <Button onClick={handleSave}>
++              Zapisz czujnik
++            </Button>
++          )}
+         </DialogFooter>
+       </DialogContent>
+     </Dialog>
+diff --git a/src/components/AppShell.tsx b/src/components/AppShell.tsx
+index 73d466e..cab6a58 100644
+--- a/src/components/AppShell.tsx
++++ b/src/components/AppShell.tsx
+@@ -1,5 +1,9 @@
++// ============================================================
++// AppShell.tsx — główny layout z paskiem nawigacji
++// ============================================================
++
+ import { Link, Outlet, useLocation } from "@tanstack/react-router";
+-import { Activity, Home, LineChart, Settings as SettingsIcon, Thermometer } from "lucide-react";
++import { Activity, Home, LineChart, Settings as SettingsIcon, Radio } from "lucide-react";
+ import { Toaster } from "@/components/ui/sonner";
+ import { useEffect } from "react";
+ import { getSettings } from "@/services/storageService";
+@@ -7,9 +11,9 @@ import { ensureDemoSensors, startDemoLoop, stopDemoLoop } from "@/services/demoS
+ import { cn } from "@/lib/utils";
+ 
+ const NAV = [
+-  { to: "/", label: "Dom", icon: Home },
+-  { to: "/sensors", label: "Czujniki", icon: Activity },
+-  { to: "/history", label: "Historia", icon: LineChart },
++  { to: "/",        label: "Dom",       icon: Home },
++  { to: "/sensors", label: "Czujniki",  icon: Activity },
++  { to: "/history", label: "Historia",  icon: LineChart },
+   { to: "/settings", label: "Ustawienia", icon: SettingsIcon },
+ ] as const;
+ 
+@@ -17,10 +21,9 @@ export function AppShell() {
+   const location = useLocation();
+ 
+   useEffect(() => {
+-    const settings = getSettings();
+-    if (settings.theme === "dark") document.documentElement.classList.add("dark");
+-    else document.documentElement.classList.remove("dark");
+-    if (settings.demoMode) {
++    const s = getSettings();
++    document.documentElement.classList.toggle("dark", s.theme === "dark");
++    if (s.demoMode) {
+       ensureDemoSensors();
+       startDemoLoop(() => {});
+     }
+@@ -33,13 +36,14 @@ export function AppShell() {
+         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
+           <Link to="/" className="flex items-center gap-2">
+             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-hero text-primary-foreground shadow-glow">
+-              <Thermometer className="h-5 w-5" />
++              <Radio className="h-5 w-5" />
+             </div>
+             <div>
+-              <div className="font-display text-lg font-bold leading-none">Termo</div>
+-              <div className="text-xs text-muted-foreground">Twój dom pod kontrolą</div>
++              <div className="font-display text-lg font-bold leading-none">Termo ELA</div>
++              <div className="text-xs text-muted-foreground">Blue Puck T Monitor</div>
+             </div>
+           </Link>
++
+           <nav className="hidden gap-1 md:flex">
+             {NAV.map((item) => {
+               const active = location.pathname === item.to;
+@@ -52,7 +56,7 @@ export function AppShell() {
+                     "flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                     active
+                       ? "bg-primary text-primary-foreground shadow-glow"
+-                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
++                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                   )}
+                 >
+                   <Icon className="h-4 w-4" />
+@@ -68,6 +72,7 @@ export function AppShell() {
+         <Outlet />
+       </main>
+ 
++      {/* Dolna nawigacja mobilna */}
+       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-border/40 bg-background/90 backdrop-blur-xl md:hidden">
+         <div className="mx-auto flex max-w-6xl items-center justify-around px-2 py-2">
+           {NAV.map((item) => {
+@@ -79,7 +84,7 @@ export function AppShell() {
+                 to={item.to}
+                 className={cn(
+                   "flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 text-xs",
+-                  active ? "text-primary" : "text-muted-foreground",
++                  active ? "text-primary" : "text-muted-foreground"
+                 )}
+               >
+                 <Icon className="h-5 w-5" />
+@@ -90,7 +95,7 @@ export function AppShell() {
+         </div>
+       </nav>
+ 
+-      <Toaster position="top-center" />
++      <Toaster position="top-center" richColors />
+     </div>
+   );
+ }
+diff --git a/src/components/SensorCard.tsx b/src/components/SensorCard.tsx
+index 6b0d452..6825f45 100644
+--- a/src/components/SensorCard.tsx
++++ b/src/components/SensorCard.tsx
+@@ -1,5 +1,14 @@
++// ============================================================
++// SensorCard.tsx — karta czujnika z danymi ELA Blue Puck T
++// ============================================================
++
+ import type { Sensor } from "@/types/sensor";
+-import { Bluetooth, BluetoothOff, Droplets, ThermometerSnowflake, ThermometerSun, AlertTriangle } from "lucide-react";
++import { formatTemp, getSettings } from "@/services/storageService";
++import {
++  Bluetooth, BluetoothOff, Droplets, ThermometerSnowflake,
++  ThermometerSun, AlertTriangle, BatteryMedium, BatteryLow,
++  BatteryFull, Wifi, WifiOff, Radio,
++} from "lucide-react";
+ import { cn } from "@/lib/utils";
+ 
+ interface SensorCardProps {
+@@ -10,9 +19,9 @@ interface SensorCardProps {
+ const getStatus = (s: Sensor) => {
+   if (s.lastTemperature == null) return { kind: "offline" as const, label: "Brak odczytu" };
+   if (s.minTempAlert != null && s.lastTemperature < s.minTempAlert)
+-    return { kind: "cold" as const, label: "Za zimno" };
++    return { kind: "cold" as const, label: "Za zimno!" };
+   if (s.maxTempAlert != null && s.lastTemperature > s.maxTempAlert)
+-    return { kind: "hot" as const, label: "Za ciepło" };
++    return { kind: "hot" as const, label: "Za ciepło!" };
+   if (s.lastTemperature < 10) return { kind: "cold" as const, label: "Chłodno" };
+   if (s.lastTemperature > 26) return { kind: "warm" as const, label: "Ciepło" };
+   return { kind: "ok" as const, label: "Komfortowo" };
+@@ -23,41 +32,73 @@ const gradients = {
+   ok: "bg-gradient-ok",
+   warm: "bg-gradient-warm",
+   hot: "bg-gradient-hot",
+-  offline: "bg-muted",
++  offline: "bg-muted/60",
+ };
+ 
+ const formatTime = (iso?: string) => {
+   if (!iso) return "—";
+   const d = new Date(iso);
+   const diff = Date.now() - d.getTime();
+-  if (diff < 60_000) return "przed chwilą";
++  if (diff < 30_000) return "przed chwilą";
++  if (diff < 60_000) return `${Math.floor(diff / 1000)}s temu`;
+   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min temu`;
+-  return d.toLocaleString("pl-PL", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
++  return d.toLocaleString("pl-PL", {
++    hour: "2-digit", minute: "2-digit",
++    day: "2-digit", month: "2-digit",
++  });
++};
++
++const BatteryIcon = ({ level }: { level?: number }) => {
++  if (level == null) return null;
++  if (level < 20) return <BatteryLow className="h-3.5 w-3.5 text-destructive" />;
++  if (level < 60) return <BatteryMedium className="h-3.5 w-3.5" />;
++  return <BatteryFull className="h-3.5 w-3.5" />;
++};
++
++const RssiIcon = ({ rssi }: { rssi?: number }) => {
++  if (rssi == null) return null;
++  return rssi > -70
++    ? <Wifi className="h-3.5 w-3.5" />
++    : <WifiOff className="h-3.5 w-3.5 opacity-70" />;
+ };
+ 
+ export function SensorCard({ sensor, onClick }: SensorCardProps) {
+   const status = getStatus(sensor);
+   const isOffline = status.kind === "offline";
++  const settings = getSettings();
++  const isELA = sensor.source === "ela-advertisement";
+ 
+   return (
+     <button
+       onClick={onClick}
+       className={cn(
+-        "group relative overflow-hidden rounded-3xl p-6 text-left shadow-card transition-all",
++        "group relative overflow-hidden rounded-3xl p-6 text-left shadow-card transition-all duration-300",
+         "hover:-translate-y-1 hover:shadow-glow border border-border/40",
+         gradients[status.kind],
+         !isOffline && "text-white",
+       )}
+     >
+-      <div className="flex items-start justify-between">
+-        <div>
+-          <p className={cn("text-xs font-medium uppercase tracking-widest opacity-80")}>
+-            {sensor.customName ?? sensor.bluetoothName}
++      {/* Dekoracyjne koła w tle */}
++      <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-white/10 blur-2xl" />
++      <div className="pointer-events-none absolute -bottom-8 -left-4 h-24 w-24 rounded-full bg-white/8 blur-2xl" />
++
++      {/* Header */}
++      <div className="relative flex items-start justify-between">
++        <div className="min-w-0">
++          <p className="text-xs font-medium uppercase tracking-widest opacity-75 truncate">
++            {sensor.customName || (isELA ? "ELA Blue Puck T" : sensor.bluetoothName)}
+           </p>
+-          <h3 className="mt-1 text-2xl font-bold">{sensor.roomName}</h3>
++          <h3 className="mt-1 text-2xl font-bold tracking-tight truncate">{sensor.roomName}</h3>
+         </div>
+-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 backdrop-blur">
+-          {sensor.status === "connected" ? (
++
++        {/* Status ikona */}
++        <div className={cn(
++          "ml-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-full backdrop-blur",
++          isOffline ? "bg-muted-foreground/15" : "bg-white/15"
++        )}>
++          {isELA ? (
++            <Radio className="h-5 w-5" />
++          ) : sensor.status === "connected" ? (
+             <Bluetooth className="h-5 w-5" />
+           ) : (
+             <BluetoothOff className="h-5 w-5" />
+@@ -65,7 +106,8 @@ export function SensorCard({ sensor, onClick }: SensorCardProps) {
+         </div>
+       </div>
+ 
+-      <div className="mt-8 flex items-end gap-2">
++      {/* Temperatura — główna liczba */}
++      <div className="relative mt-8 flex items-end gap-1">
+         {isOffline ? (
+           <div className="flex items-center gap-2 text-muted-foreground">
+             <AlertTriangle className="h-5 w-5" />
+@@ -73,35 +115,72 @@ export function SensorCard({ sensor, onClick }: SensorCardProps) {
+           </div>
+         ) : (
+           <>
+-            <span className="text-6xl font-bold tracking-tight tabular-nums">
+-              {sensor.lastTemperature?.toFixed(1)}
++            <span className="text-6xl font-bold tracking-tighter tabular-nums leading-none">
++              {sensor.lastTemperature != null
++                ? formatTemp(sensor.lastTemperature, settings.tempUnit).replace(/°[CF]$/, "")
++                : "—"}
++            </span>
++            <span className="mb-1.5 text-2xl font-semibold opacity-80">
++              °{settings.tempUnit}
+             </span>
+-            <span className="mb-2 text-2xl font-medium opacity-80">°C</span>
+           </>
+         )}
+       </div>
+ 
+-      <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
+-        {sensor.lastHumidity != null && (
+-          <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1 backdrop-blur">
+-            <Droplets className="h-3.5 w-3.5" /> {sensor.lastHumidity.toFixed(0)}%
+-          </span>
+-        )}
++      {/* Badge'e dolne */}
++      <div className="relative mt-5 flex flex-wrap items-center gap-2 text-sm">
++        {/* Status komfortu */}
+         <span className={cn(
+-          "inline-flex items-center gap-1 rounded-full px-3 py-1 backdrop-blur",
+-          isOffline ? "bg-muted-foreground/10 text-muted-foreground" : "bg-white/15",
++          "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium backdrop-blur",
++          isOffline ? "bg-muted-foreground/10 text-muted-foreground" : "bg-white/20"
+         )}>
+-          {status.kind === "cold" || status.kind === "offline" ? (
+-            <ThermometerSnowflake className="h-3.5 w-3.5" />
+-          ) : (
+-            <ThermometerSun className="h-3.5 w-3.5" />
+-          )}
++          {status.kind === "cold" || status.kind === "offline"
++            ? <ThermometerSnowflake className="h-3.5 w-3.5" />
++            : <ThermometerSun className="h-3.5 w-3.5" />}
+           {status.label}
+         </span>
++
++        {/* Wilgotność (jeśli dostępna) */}
++        {sensor.lastHumidity != null && (
++          <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-3 py-1 text-xs font-medium backdrop-blur">
++            <Droplets className="h-3.5 w-3.5" />
++            {sensor.lastHumidity.toFixed(0)}%
++          </span>
++        )}
++
++        {/* Bateria ELA */}
++        {sensor.batteryLevel != null && (
++          <span className={cn(
++            "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs backdrop-blur",
++            sensor.batteryLevel < 20
++              ? "bg-destructive/30 font-semibold"
++              : "bg-white/15"
++          )}>
++            <BatteryIcon level={sensor.batteryLevel} />
++            {sensor.batteryLevel}%
++          </span>
++        )}
++
++        {/* RSSI */}
++        {sensor.lastRssi != null && (
++          <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-xs backdrop-blur">
++            <RssiIcon rssi={sensor.lastRssi} />
++            {sensor.lastRssi} dBm
++          </span>
++        )}
+       </div>
+ 
+-      <div className={cn("mt-4 text-xs", isOffline ? "text-muted-foreground" : "opacity-70")}>
+-        Ostatni odczyt: {formatTime(sensor.lastReadAt)}
++      {/* Timestamp */}
++      <div className={cn(
++        "relative mt-4 text-xs",
++        isOffline ? "text-muted-foreground" : "opacity-60"
++      )}>
++        Odczyt: {formatTime(sensor.lastReadAt)}
++        {sensor.isDemo && (
++          <span className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-xs font-medium">
++            DEMO
++          </span>
++        )}
+       </div>
+     </button>
+   );
+diff --git a/src/components/TemperatureChart.tsx b/src/components/TemperatureChart.tsx
+index abcb9d1..61c6cec 100644
+--- a/src/components/TemperatureChart.tsx
++++ b/src/components/TemperatureChart.tsx
+@@ -1,6 +1,14 @@
++// ============================================================
++// TemperatureChart.tsx — wykresy temperatury (+ opcjonalnie RSSI)
++// ============================================================
++
+ import { useMemo } from "react";
+-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+-import { getMeasurementsForSensor } from "@/services/storageService";
++import {
++  Area, AreaChart, CartesianGrid, ResponsiveContainer,
++  Tooltip, XAxis, YAxis, ReferenceLine,
++} from "recharts";
++import { getMeasurementsForSensor, getSettings } from "@/services/storageService";
++import { getSensors } from "@/services/storageService";
+ 
+ interface TemperatureChartProps {
+   sensorId: string;
+@@ -8,25 +16,29 @@ interface TemperatureChartProps {
+ }
+ 
+ const RANGES: Record<TemperatureChartProps["range"], number> = {
+-  "1h": 60 * 60 * 1000,
+-  "24h": 24 * 60 * 60 * 1000,
+-  "7d": 7 * 24 * 60 * 60 * 1000,
++  "1h":  60 * 60 * 1_000,
++  "24h": 24 * 60 * 60 * 1_000,
++  "7d":  7 * 24 * 60 * 60 * 1_000,
+ };
+ 
+ export function TemperatureChart({ sensorId, range }: TemperatureChartProps) {
++  const settings = getSettings();
++  const sensor = getSensors().find((s) => s.id === sensorId);
++
+   const data = useMemo(() => {
+     const measurements = getMeasurementsForSensor(sensorId, RANGES[range]);
+     return measurements.map((m) => ({
+       time: new Date(m.createdAt).getTime(),
+       temperature: m.temperature,
+       humidity: m.humidity,
++      rssi: m.rssi,
+     }));
+   }, [sensorId, range]);
+ 
+   if (data.length < 2) {
+     return (
+-      <div className="flex h-64 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+-        Za mało danych do wykresu — wkrótce pojawią się odczyty.
++      <div className="flex h-64 items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
++        Za mało danych — czujnik jeszcze zbiera pomiary.
+       </div>
+     );
+   }
+@@ -34,30 +46,88 @@ export function TemperatureChart({ sensorId, range }: TemperatureChartProps) {
+   const fmt = (t: number) =>
+     new Date(t).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+ 
++  const tempLabel = `Temperatura [°${settings.tempUnit}]`;
++  const displayTemp = (v: number) =>
++    settings.tempUnit === "F" ? +(v * 9 / 5 + 32).toFixed(1) : v;
++
++  const displayData = data.map((d) => ({
++    ...d,
++    temperature: displayTemp(d.temperature),
++  }));
++
+   return (
+     <div className="h-64 w-full">
+       <ResponsiveContainer>
+-        <AreaChart data={data} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
++        <AreaChart data={displayData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
+           <defs>
+-            <linearGradient id="tempFill" x1="0" y1="0" x2="0" y2="1">
+-              <stop offset="0%" stopColor="oklch(0.72 0.18 250)" stopOpacity={0.6} />
+-              <stop offset="100%" stopColor="oklch(0.72 0.18 250)" stopOpacity={0} />
++            <linearGradient id={`tempFill-${sensorId}`} x1="0" y1="0" x2="0" y2="1">
++              <stop offset="5%" stopColor="oklch(0.72 0.18 250)" stopOpacity={0.5} />
++              <stop offset="95%" stopColor="oklch(0.72 0.18 250)" stopOpacity={0} />
+             </linearGradient>
+           </defs>
+-          <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+-          <XAxis dataKey="time" tickFormatter={fmt} stroke="var(--muted-foreground)" fontSize={11} />
+-          <YAxis stroke="var(--muted-foreground)" fontSize={11} domain={["auto", "auto"]} />
++
++          <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" strokeOpacity={0.5} />
++          <XAxis
++            dataKey="time"
++            tickFormatter={fmt}
++            stroke="var(--muted-foreground)"
++            fontSize={11}
++            tickLine={false}
++          />
++          <YAxis
++            stroke="var(--muted-foreground)"
++            fontSize={11}
++            domain={["auto", "auto"]}
++            tickLine={false}
++          />
++
+           <Tooltip
+             contentStyle={{
+               background: "var(--popover)",
+               border: "1px solid var(--border)",
+               borderRadius: "0.75rem",
+               color: "var(--popover-foreground)",
++              fontSize: "12px",
++            }}
++            labelFormatter={(v) =>
++              new Date(v as number).toLocaleString("pl-PL")}
++            formatter={(v: number, k: string) => {
++              if (k === "temperature") return [`${v.toFixed(1)}°${settings.tempUnit}`, tempLabel];
++              if (k === "humidity") return [`${v.toFixed(0)}%`, "Wilgotność"];
++              if (k === "rssi") return [`${v} dBm`, "Sygnał RSSI"];
++              return [v, k];
+             }}
+-            labelFormatter={(v) => new Date(v as number).toLocaleString("pl-PL")}
+-            formatter={(v: number, k) => [`${v.toFixed(1)}${k === "temperature" ? "°C" : "%"}`, k === "temperature" ? "Temperatura" : "Wilgotność"]}
+           />
+-          <Area type="monotone" dataKey="temperature" stroke="oklch(0.72 0.18 250)" strokeWidth={2} fill="url(#tempFill)" />
++
++          {/* Linie alertów */}
++          {sensor?.minTempAlert != null && (
++            <ReferenceLine
++              y={displayTemp(sensor.minTempAlert)}
++              stroke="oklch(0.65 0.22 28)"
++              strokeDasharray="4 4"
++              strokeOpacity={0.7}
++              label={{ value: `min ${sensor.minTempAlert}°`, position: "insideBottomLeft", fontSize: 10, fill: "oklch(0.65 0.22 28)" }}
++            />
++          )}
++          {sensor?.maxTempAlert != null && (
++            <ReferenceLine
++              y={displayTemp(sensor.maxTempAlert)}
++              stroke="oklch(0.65 0.22 28)"
++              strokeDasharray="4 4"
++              strokeOpacity={0.7}
++              label={{ value: `max ${sensor.maxTempAlert}°`, position: "insideTopLeft", fontSize: 10, fill: "oklch(0.65 0.22 28)" }}
++            />
++          )}
++
++          <Area
++            type="monotone"
++            dataKey="temperature"
++            stroke="oklch(0.72 0.18 250)"
++            strokeWidth={2}
++            fill={`url(#tempFill-${sensorId})`}
++            dot={false}
++            activeDot={{ r: 4, fill: "oklch(0.72 0.18 250)" }}
++          />
+         </AreaChart>
+       </ResponsiveContainer>
+     </div>
+diff --git a/src/hooks/useSensors.ts b/src/hooks/useSensors.ts
+index 7f51a91..15b39f5 100644
+--- a/src/hooks/useSensors.ts
++++ b/src/hooks/useSensors.ts
+@@ -1,17 +1,30 @@
+-import { useCallback, useEffect, useState } from "react";
++// ============================================================
++// useSensors.ts — główny hook zarządzający czujnikami
++// ============================================================
++
++import { useCallback, useEffect, useRef, useState } from "react";
+ import type { Sensor } from "@/types/sensor";
+ import {
+   deleteSensor as deleteSensorStorage,
+   getSensors,
+   upsertSensor as upsertSensorStorage,
++  addMeasurement,
+ } from "@/services/storageService";
++import {
++  getCachedDevice,
++  startAdvertisementWatch,
++  stopAdvertisementWatch,
++} from "@/services/bluetoothService";
++import { getProfile } from "@/services/sensorProfiles";
+ 
+ export function useSensors() {
+   const [sensors, setSensors] = useState<Sensor[]>([]);
+   const [tick, setTick] = useState(0);
++  const watchedIds = useRef<Set<string>>(new Set());
+ 
+   const refresh = useCallback(() => setTick((t) => t + 1), []);
+ 
++  // Odśwież listę czujników
+   useEffect(() => {
+     setSensors(getSensors());
+     const handler = () => setSensors(getSensors());
+@@ -23,15 +36,89 @@ export function useSensors() {
+     };
+   }, [tick]);
+ 
+-  const upsert = useCallback((s: Sensor) => {
+-    upsertSensorStorage(s);
+-    refresh();
+-  }, [refresh]);
++  // Uruchom advertisement watch dla czujników ELA które mają urządzenie w cache
++  useEffect(() => {
++    const elaSensors = getSensors().filter(
++      (s) => s.source === "ela-advertisement" && !s.isDemo && !watchedIds.current.has(s.id)
++    );
++
++    elaSensors.forEach((sensor) => {
++      const device = getCachedDevice(sensor.deviceId);
++      if (!device) return;
++
++      watchedIds.current.add(sensor.id);
++
++      startAdvertisementWatch(device, {
++        onDeviceFound: (_device, data) => {
++          const profile = getProfile(sensor.profileId);
++          if (!profile) return;
++
++          const now = new Date().toISOString();
++          const updated: Sensor = {
++            ...sensor,
++            lastTemperature: data.temperature ?? sensor.lastTemperature,
++            lastHumidity: data.humidity ?? sensor.lastHumidity,
++            lastRssi: data.rssi,
++            batteryLevel: data.battery ?? sensor.batteryLevel,
++            lastReadAt: now,
++            status: "connected",
++          };
++          upsertSensorStorage(updated);
++
++          if (data.temperature !== undefined) {
++            addMeasurement({
++              id: `${sensor.id}-${Date.now()}`,
++              sensorId: sensor.id,
++              roomName: sensor.roomName,
++              temperature: data.temperature,
++              humidity: data.humidity,
++              rssi: data.rssi,
++              batteryLevel: data.battery,
++              createdAt: now,
++            });
++          }
++
++          setSensors(getSensors());
++        },
++        onError: (err) => {
++          console.error(`ELA watch error (${sensor.roomName}):`, err);
++          const updated: Sensor = { ...sensor, status: "error" };
++          upsertSensorStorage(updated);
++          setSensors(getSensors());
++        },
++      }).catch(console.error);
++    });
++
++    return () => {
++      // cleanup nie zatrzymuje watch — robimy to tylko przy unmount AppShell
++    };
++  }, [tick]);
++
++  const upsert = useCallback(
++    (s: Sensor) => {
++      upsertSensorStorage(s);
++      refresh();
++    },
++    [refresh]
++  );
++
++  const remove = useCallback(
++    (id: string) => {
++      stopAdvertisementWatch(id);
++      watchedIds.current.delete(id);
++      deleteSensorStorage(id);
++      refresh();
++    },
++    [refresh]
++  );
+ 
+-  const remove = useCallback((id: string) => {
+-    deleteSensorStorage(id);
+-    refresh();
+-  }, [refresh]);
++  // Sensory z alertami
++  const alertSensors = sensors.filter((s) => {
++    if (s.lastTemperature == null) return false;
++    if (s.minTempAlert != null && s.lastTemperature < s.minTempAlert) return true;
++    if (s.maxTempAlert != null && s.lastTemperature > s.maxTempAlert) return true;
++    return false;
++  });
+ 
+-  return { sensors, upsert, remove, refresh };
++  return { sensors, upsert, remove, refresh, alertSensors };
+ }
+diff --git a/src/routes/history.tsx b/src/routes/history.tsx
+index f5af1bb..1912170 100644
+--- a/src/routes/history.tsx
++++ b/src/routes/history.tsx
+@@ -1,15 +1,21 @@
++// ============================================================
++// routes/history.tsx — historia pomiarów
++// ============================================================
++
+ import { createFileRoute } from "@tanstack/react-router";
+ import { useState } from "react";
+ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+ import { TemperatureChart } from "@/components/TemperatureChart";
+ import { useSensors } from "@/hooks/useSensors";
++import { formatTemp, getSettings } from "@/services/storageService";
++import { Radio } from "lucide-react";
+ 
+ export const Route = createFileRoute("/history")({
+   head: () => ({
+     meta: [
+-      { title: "Historia — Termo" },
+-      { name: "description", content: "Wykresy temperatury i wilgotności w każdym pomieszczeniu." },
++      { title: "Historia — Termo ELA" },
++      { name: "description", content: "Historia pomiarów temperatury ELA Blue Puck T." },
+     ],
+   }),
+   component: HistoryPage,
+@@ -20,13 +26,16 @@ type Range = "1h" | "24h" | "7d";
+ function HistoryPage() {
+   const { sensors } = useSensors();
+   const [range, setRange] = useState<Range>("1h");
++  const settings = getSettings();
+ 
+   return (
+     <div className="space-y-6">
+       <div className="flex flex-wrap items-end justify-between gap-3">
+         <div>
+           <h1 className="font-display text-3xl font-bold">Historia pomiarów</h1>
+-          <p className="text-sm text-muted-foreground">Lokalna historia (IndexedDB/localStorage).</p>
++          <p className="text-sm text-muted-foreground">
++            Lokalna historia z czujników ELA Blue Puck T.
++          </p>
+         </div>
+         <Tabs value={range} onValueChange={(v) => setRange(v as Range)}>
+           <TabsList>
+@@ -38,7 +47,12 @@ function HistoryPage() {
+       </div>
+ 
+       {sensors.length === 0 && (
+-        <Card><CardContent className="py-12 text-center text-muted-foreground">Brak danych.</CardContent></Card>
++        <Card>
++          <CardContent className="py-12 text-center text-muted-foreground">
++            <Radio className="mx-auto h-8 w-8 mb-3 opacity-40" />
++            Brak czujników — dodaj Blue Puck T w zakładce Czujniki.
++          </CardContent>
++        </Card>
+       )}
+ 
+       <div className="grid gap-4 lg:grid-cols-2">
+@@ -48,7 +62,9 @@ function HistoryPage() {
+               <CardTitle className="flex items-center justify-between">
+                 <span>{s.roomName}</span>
+                 <span className="text-sm font-normal text-muted-foreground">
+-                  {s.lastTemperature != null ? `${s.lastTemperature.toFixed(1)}°C` : "—"}
++                  {s.lastTemperature != null
++                    ? formatTemp(s.lastTemperature, settings.tempUnit)
++                    : "—"}
+                 </span>
+               </CardTitle>
+             </CardHeader>
+diff --git a/src/routes/index.tsx b/src/routes/index.tsx
+index 4e505a7..db3ac66 100644
+--- a/src/routes/index.tsx
++++ b/src/routes/index.tsx
+@@ -1,48 +1,67 @@
++// ============================================================
++// routes/index.tsx — Dashboard
++// ============================================================
++
+ import { createFileRoute } from "@tanstack/react-router";
+ import { useState } from "react";
+ import { Button } from "@/components/ui/button";
+-import { Plus, Sparkles } from "lucide-react";
++import { Plus, Radio, AlertTriangle, Sparkles } from "lucide-react";
+ import { SensorCard } from "@/components/SensorCard";
+ import { AddSensorModal } from "@/components/AddSensorModal";
+ import { useSensors } from "@/hooks/useSensors";
++import { formatTemp, getSettings } from "@/services/storageService";
+ 
+-export const Route = createFileRoute("/")({
++export const Route = createFileRoute("/")(({
+   head: () => ({
+     meta: [
+-      { title: "Dom — Termo" },
+-      { name: "description", content: "Aktualna temperatura i wilgotność we wszystkich pomieszczeniach Twojego domu." },
++      { title: "Dom — Termo ELA" },
++      { name: "description", content: "Monitor temperatury ELA Blue Puck T" },
+     ],
+   }),
+   component: DashboardPage,
+-});
++}));
+ 
+ function DashboardPage() {
+-  const { sensors, refresh } = useSensors();
++  const { sensors, alertSensors, refresh } = useSensors();
+   const [addOpen, setAddOpen] = useState(false);
++  const settings = getSettings();
+ 
+-  const alerts = sensors.filter((s) => {
+-    if (s.lastTemperature == null) return false;
+-    if (s.minTempAlert != null && s.lastTemperature < s.minTempAlert) return true;
+-    if (s.maxTempAlert != null && s.lastTemperature > s.maxTempAlert) return true;
+-    return false;
+-  });
++  // Średnia temperatura wszystkich czujników
++  const connected = sensors.filter((s) => s.lastTemperature != null);
++  const avgTemp = connected.length > 0
++    ? connected.reduce((sum, s) => sum + (s.lastTemperature ?? 0), 0) / connected.length
++    : null;
+ 
+   return (
+     <div className="space-y-8">
++      {/* Hero banner */}
+       <section className="relative overflow-hidden rounded-3xl bg-gradient-hero p-8 text-primary-foreground shadow-glow">
+         <div className="relative z-10 flex flex-wrap items-end justify-between gap-6">
+           <div>
+             <div className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs font-medium backdrop-blur">
+-              <Sparkles className="h-3.5 w-3.5" /> {sensors.length} aktywnych czujników
++              <Radio className="h-3.5 w-3.5" />
++              {sensors.filter((s) => s.status === "connected").length} czujników online
++              {sensors.some((s) => s.source === "ela-advertisement") && (
++                <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">
++                  ELA BLE
++                </span>
++              )}
+             </div>
+             <h1 className="mt-3 max-w-xl text-4xl font-bold leading-tight sm:text-5xl">
+-              Twój dom, <br />w idealnej temperaturze.
++              Twój dom,<br />pod kontrolą.
+             </h1>
+-            <p className="mt-2 max-w-md text-sm opacity-90">
+-              Monitoruj każde pomieszczenie w czasie rzeczywistym z czujników Bluetooth Low Energy.
+-            </p>
++            {avgTemp != null && (
++              <p className="mt-2 text-lg font-semibold opacity-90">
++                Śr. temperatura: {formatTemp(avgTemp, settings.tempUnit)}
++              </p>
++            )}
+           </div>
+-          <Button size="lg" variant="secondary" onClick={() => setAddOpen(true)} className="shadow-card">
++          <Button
++            size="lg"
++            variant="secondary"
++            onClick={() => setAddOpen(true)}
++            className="shadow-card"
++          >
+             <Plus className="mr-2 h-4 w-4" /> Dodaj czujnik
+           </Button>
+         </div>
+@@ -50,32 +69,51 @@ function DashboardPage() {
+         <div className="absolute -bottom-32 -left-10 h-72 w-72 rounded-full bg-white/10 blur-3xl" />
+       </section>
+ 
+-      {alerts.length > 0 && (
+-        <section className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
+-          <strong className="text-destructive">Alerty:</strong>{" "}
+-          {alerts.map((a) => `${a.roomName} ${a.lastTemperature?.toFixed(1)}°C`).join(" · ")}
++      {/* Alerty temperatury */}
++      {alertSensors.length > 0 && (
++        <section className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4">
++          <div className="flex items-start gap-2">
++            <AlertTriangle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
++            <div>
++              <p className="font-semibold text-destructive text-sm">Przekroczono limity temperatury</p>
++              <div className="mt-1 flex flex-wrap gap-2">
++                {alertSensors.map((s) => (
++                  <span key={s.id} className="rounded-full bg-destructive/15 px-3 py-0.5 text-xs font-medium text-destructive">
++                    {s.roomName}: {formatTemp(s.lastTemperature, settings.tempUnit)}
++                  </span>
++                ))}
++              </div>
++            </div>
++          </div>
+         </section>
+       )}
+ 
++      {/* Siatka czujników */}
+       <section>
+         <div className="mb-4 flex items-center justify-between">
+           <h2 className="font-display text-xl font-bold">Pomieszczenia</h2>
+-          <span className="text-sm text-muted-foreground">Aktualizacja na żywo</span>
++          <span className="text-sm text-muted-foreground flex items-center gap-1.5">
++            <Sparkles className="h-3.5 w-3.5" />
++            Aktualizacja na żywo
++          </span>
+         </div>
+ 
+         {sensors.length === 0 ? (
+           <div className="rounded-3xl border border-dashed border-border p-12 text-center">
++            <Radio className="mx-auto h-10 w-10 text-muted-foreground/40 mb-3" />
+             <h3 className="font-display text-lg font-semibold">Brak czujników</h3>
+-            <p className="mt-1 text-sm text-muted-foreground">
+-              Dodaj pierwszy czujnik Bluetooth lub włącz tryb demo w Ustawieniach.
++            <p className="mt-1 text-sm text-muted-foreground max-w-xs mx-auto">
++              Dodaj czujnik ELA Blue Puck T lub włącz tryb demo w Ustawieniach.
+             </p>
+             <Button onClick={() => setAddOpen(true)} className="mt-4">
+-              <Plus className="mr-2 h-4 w-4" /> Dodaj czujnik
++              <Plus className="mr-2 h-4 w-4" /> Dodaj Blue Puck T
+             </Button>
+           </div>
+         ) : (
+           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+-            {sensors.map((s) => <SensorCard key={s.id} sensor={s} />)}
++            {sensors.map((s) => (
++              <SensorCard key={s.id} sensor={s} />
++            ))}
+           </div>
+         )}
+       </section>
+diff --git a/src/routes/sensors.tsx b/src/routes/sensors.tsx
+index 3b278e9..df00516 100644
+--- a/src/routes/sensors.tsx
++++ b/src/routes/sensors.tsx
+@@ -1,21 +1,33 @@
++// ============================================================
++// routes/sensors.tsx — zarządzanie czujnikami ELA
++// ============================================================
++
+ import { createFileRoute } from "@tanstack/react-router";
+ import { useState } from "react";
+ import { Button } from "@/components/ui/button";
+ import { Input } from "@/components/ui/input";
+ import { Label } from "@/components/ui/label";
+ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+-import { Bluetooth, BluetoothOff, Plus, RefreshCw, Trash2 } from "lucide-react";
++import { Badge } from "@/components/ui/badge";
++import {
++  Bluetooth, BluetoothOff, Plus, RefreshCw, Trash2,
++  Radio, BatteryMedium, BatteryLow, BatteryFull, Wifi, WifiOff,
++} from "lucide-react";
+ import { useSensors } from "@/hooks/useSensors";
+ import { AddSensorModal } from "@/components/AddSensorModal";
+-import { reconnectSensor } from "@/services/bluetoothService";
++import {
++  reconnectELASensor,
++  reconnectSensor,
++} from "@/services/bluetoothService";
++import { formatTemp, getSettings } from "@/services/storageService";
+ import { toast } from "sonner";
+ import type { Sensor } from "@/types/sensor";
+ 
+ export const Route = createFileRoute("/sensors")({
+   head: () => ({
+     meta: [
+-      { title: "Czujniki — Termo" },
+-      { name: "description", content: "Zarządzaj czujnikami Bluetooth, alertami i przypisaniem do pomieszczeń." },
++      { title: "Czujniki — Termo ELA" },
++      { name: "description", content: "Zarządzaj czujnikami ELA Blue Puck T." },
+     ],
+   }),
+   component: SensorsPage,
+@@ -24,12 +36,38 @@ export const Route = createFileRoute("/sensors")({
+ function SensorsPage() {
+   const { sensors, upsert, remove, refresh } = useSensors();
+   const [addOpen, setAddOpen] = useState(false);
++  const settings = getSettings();
+ 
+   const handleReconnect = async (s: Sensor) => {
+     if (s.isDemo) {
+       toast.info("To czujnik demo — zawsze połączony.");
+       return;
+     }
++
++    if (s.source === "ela-advertisement") {
++      const ok = await reconnectELASensor(s, {
++        onDeviceFound: (_device, data) => {
++          upsert({
++            ...s,
++            lastTemperature: data.temperature ?? s.lastTemperature,
++            batteryLevel: data.battery ?? s.batteryLevel,
++            lastRssi: data.rssi,
++            lastReadAt: new Date().toISOString(),
++            status: "connected",
++          });
++          toast.success("ELA Advertisement wznowiony.");
++        },
++        onError: (e) => {
++          toast.error(`Błąd: ${e.message}`);
++          upsert({ ...s, status: "error" });
++        },
++      });
++      if (!ok) {
++        toast.warning("Urządzenie nie w cache — dodaj czujnik ponownie.");
++      }
++      return;
++    }
++
+     try {
+       await reconnectSensor(s);
+       upsert({ ...s, status: "connected" });
+@@ -46,7 +84,9 @@ function SensorsPage() {
+       <div className="flex items-center justify-between">
+         <div>
+           <h1 className="font-display text-3xl font-bold">Czujniki</h1>
+-          <p className="text-sm text-muted-foreground">Wszystkie urządzenia podpięte do aplikacji.</p>
++          <p className="text-sm text-muted-foreground">
++            Wszystkie urządzenia BLE podpięte do aplikacji.
++          </p>
+         </div>
+         <Button onClick={() => setAddOpen(true)}>
+           <Plus className="mr-2 h-4 w-4" /> Dodaj
+@@ -54,71 +94,167 @@ function SensorsPage() {
+       </div>
+ 
+       {sensors.length === 0 && (
+-        <Card><CardContent className="py-12 text-center text-muted-foreground">Brak czujników.</CardContent></Card>
++        <Card>
++          <CardContent className="py-12 text-center text-muted-foreground">
++            Brak czujników. Kliknij „Dodaj" aby sparować Blue Puck T.
++          </CardContent>
++        </Card>
+       )}
+ 
+       <div className="grid gap-4">
+-        {sensors.map((s) => (
+-          <Card key={s.id}>
+-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+-              <CardTitle className="flex items-center gap-2">
+-                {s.status === "connected" ? <Bluetooth className="h-4 w-4 text-ok" /> : <BluetoothOff className="h-4 w-4 text-muted-foreground" />}
+-                {s.roomName}
+-                {s.isDemo && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">DEMO</span>}
+-              </CardTitle>
+-              <div className="flex gap-1">
+-                <Button size="icon" variant="ghost" onClick={() => handleReconnect(s)}><RefreshCw className="h-4 w-4" /></Button>
+-                <Button size="icon" variant="ghost" onClick={() => { remove(s.id); toast.success("Usunięto czujnik."); }}>
+-                  <Trash2 className="h-4 w-4 text-destructive" />
+-                </Button>
+-              </div>
+-            </CardHeader>
+-            <CardContent className="space-y-4">
+-              <div className="grid gap-3 sm:grid-cols-2">
+-                <div>
+-                  <Label className="text-xs text-muted-foreground">Bluetooth</Label>
+-                  <div className="text-sm">{s.bluetoothName}</div>
+-                </div>
+-                <div>
+-                  <Label className="text-xs text-muted-foreground">Device ID</Label>
+-                  <div className="truncate text-xs font-mono">{s.deviceId}</div>
++        {sensors.map((s) => {
++          const isELA = s.source === "ela-advertisement";
++
++          return (
++            <Card key={s.id} className="overflow-hidden">
++              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
++                <CardTitle className="flex items-center gap-2 flex-wrap">
++                  {isELA ? (
++                    <Radio className="h-4 w-4 text-primary shrink-0" />
++                  ) : s.status === "connected" ? (
++                    <Bluetooth className="h-4 w-4 text-ok shrink-0" />
++                  ) : (
++                    <BluetoothOff className="h-4 w-4 text-muted-foreground shrink-0" />
++                  )}
++                  <span>{s.roomName}</span>
++                  {isELA && (
++                    <Badge variant="secondary" className="text-xs">
++                      ELA Advertisement
++                    </Badge>
++                  )}
++                  {s.isDemo && (
++                    <Badge className="text-xs bg-primary/15 text-primary">
++                      DEMO
++                    </Badge>
++                  )}
++                  <Badge
++                    variant={s.status === "connected" ? "default" : "outline"}
++                    className="text-xs"
++                  >
++                    {s.status === "connected" ? "Online"
++                      : s.status === "error" ? "Błąd"
++                      : s.status === "scanning" ? "Skanuje…"
++                      : "Offline"}
++                  </Badge>
++                </CardTitle>
++
++                <div className="flex gap-1">
++                  <Button
++                    size="icon" variant="ghost"
++                    onClick={() => handleReconnect(s)}
++                    title="Wznów połączenie"
++                  >
++                    <RefreshCw className="h-4 w-4" />
++                  </Button>
++                  <Button
++                    size="icon" variant="ghost"
++                    onClick={() => { remove(s.id); toast.success("Usunięto czujnik."); }}
++                    title="Usuń czujnik"
++                  >
++                    <Trash2 className="h-4 w-4 text-destructive" />
++                  </Button>
+                 </div>
+-                {s.macAddress && (
++              </CardHeader>
++
++              <CardContent className="space-y-4">
++                {/* Dane czujnika */}
++                <div className="grid gap-3 sm:grid-cols-3">
+                   <div>
+-                    <Label className="text-xs text-muted-foreground">MAC</Label>
+-                    <div className="text-xs font-mono">{s.macAddress}</div>
++                    <Label className="text-xs text-muted-foreground">Nazwa BLE</Label>
++                    <div className="text-sm font-medium truncate">{s.bluetoothName}</div>
+                   </div>
+-                )}
+-                <div>
+-                  <Label className="text-xs text-muted-foreground">Ostatni odczyt</Label>
+-                  <div className="text-sm">
+-                    {s.lastTemperature != null ? `${s.lastTemperature.toFixed(1)}°C` : "—"}
+-                    {s.lastHumidity != null ? ` · ${s.lastHumidity.toFixed(0)}%` : ""}
++                  <div>
++                    <Label className="text-xs text-muted-foreground">Device ID</Label>
++                    <div className="truncate text-xs font-mono">{s.deviceId}</div>
++                  </div>
++                  <div>
++                    <Label className="text-xs text-muted-foreground">Ostatni odczyt</Label>
++                    <div className="text-sm font-semibold">
++                      {s.lastTemperature != null
++                        ? formatTemp(s.lastTemperature, settings.tempUnit)
++                        : "—"}
++                    </div>
+                   </div>
+                 </div>
+-              </div>
+ 
+-              <div className="grid gap-3 sm:grid-cols-4">
+-                <div>
+-                  <Label className="text-xs">Pomieszczenie</Label>
+-                  <Input value={s.roomName} onChange={(e) => upsert({ ...s, roomName: e.target.value })} />
+-                </div>
+-                <div>
+-                  <Label className="text-xs">Min °C</Label>
+-                  <Input type="number" value={s.minTempAlert ?? ""} onChange={(e) => upsert({ ...s, minTempAlert: e.target.value === "" ? undefined : +e.target.value })} />
+-                </div>
+-                <div>
+-                  <Label className="text-xs">Max °C</Label>
+-                  <Input type="number" value={s.maxTempAlert ?? ""} onChange={(e) => upsert({ ...s, maxTempAlert: e.target.value === "" ? undefined : +e.target.value })} />
+-                </div>
+-                <div>
+-                  <Label className="text-xs">Max % wilg.</Label>
+-                  <Input type="number" value={s.maxHumidityAlert ?? ""} onChange={(e) => upsert({ ...s, maxHumidityAlert: e.target.value === "" ? undefined : +e.target.value })} />
++                {/* ELA-specific meta */}
++                {isELA && (
++                  <div className="grid gap-3 sm:grid-cols-3">
++                    <div>
++                      <Label className="text-xs text-muted-foreground">Bateria</Label>
++                      <div className="flex items-center gap-1.5 text-sm">
++                        {s.batteryLevel != null ? (
++                          <>
++                            {s.batteryLevel < 20
++                              ? <BatteryLow className="h-4 w-4 text-destructive" />
++                              : s.batteryLevel < 60
++                              ? <BatteryMedium className="h-4 w-4" />
++                              : <BatteryFull className="h-4 w-4 text-ok" />}
++                            <span className={s.batteryLevel < 20 ? "text-destructive font-semibold" : ""}>
++                              {s.batteryLevel}%
++                            </span>
++                          </>
++                        ) : "—"}
++                      </div>
++                    </div>
++                    <div>
++                      <Label className="text-xs text-muted-foreground">Sygnał RSSI</Label>
++                      <div className="flex items-center gap-1.5 text-sm">
++                        {s.lastRssi != null ? (
++                          <>
++                            {s.lastRssi > -70
++                              ? <Wifi className="h-4 w-4 text-ok" />
++                              : <WifiOff className="h-4 w-4 text-muted-foreground" />}
++                            {s.lastRssi} dBm
++                          </>
++                        ) : "—"}
++                      </div>
++                    </div>
++                    {s.macAddress && (
++                      <div>
++                        <Label className="text-xs text-muted-foreground">MAC</Label>
++                        <div className="text-xs font-mono">{s.macAddress}</div>
++                      </div>
++                    )}
++                  </div>
++                )}
++
++                {/* Alerty — edycja */}
++                <div className="grid gap-3 sm:grid-cols-3">
++                  <div>
++                    <Label className="text-xs">Pomieszczenie</Label>
++                    <Input
++                      value={s.roomName}
++                      onChange={(e) => upsert({ ...s, roomName: e.target.value })}
++                    />
++                  </div>
++                  <div>
++                    <Label className="text-xs">Min °{settings.tempUnit} (alert)</Label>
++                    <Input
++                      type="number"
++                      value={s.minTempAlert ?? ""}
++                      onChange={(e) => upsert({
++                        ...s,
++                        minTempAlert: e.target.value === "" ? undefined : +e.target.value,
++                      })}
++                    />
++                  </div>
++                  <div>
++                    <Label className="text-xs">Max °{settings.tempUnit} (alert)</Label>
++                    <Input
++                      type="number"
++                      value={s.maxTempAlert ?? ""}
++                      onChange={(e) => upsert({
++                        ...s,
++                        maxTempAlert: e.target.value === "" ? undefined : +e.target.value,
++                      })}
++                    />
++                  </div>
+                 </div>
+-              </div>
+-            </CardContent>
+-          </Card>
+-        ))}
++              </CardContent>
++            </Card>
++          );
++        })}
+       </div>
+ 
+       <AddSensorModal open={addOpen} onOpenChange={setAddOpen} onAdded={refresh} />
+diff --git a/src/routes/settings.tsx b/src/routes/settings.tsx
+index c6cf29c..b281255 100644
+--- a/src/routes/settings.tsx
++++ b/src/routes/settings.tsx
+@@ -1,19 +1,39 @@
++// ============================================================
++// routes/settings.tsx — ustawienia aplikacji z info o ELA
++// ============================================================
++
+ import { createFileRoute } from "@tanstack/react-router";
+ import { useEffect, useState } from "react";
+-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
++import {
++  Card, CardContent, CardDescription,
++  CardHeader, CardTitle,
++} from "@/components/ui/card";
+ import { Switch } from "@/components/ui/switch";
+ import { Label } from "@/components/ui/label";
+ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+-import { Info, Moon, Sun } from "lucide-react";
+-import { getSettings, saveSettings, type AppSettings } from "@/services/storageService";
+-import { ensureDemoSensors, removeDemoSensors, startDemoLoop, stopDemoLoop } from "@/services/demoService";
+-import { isBluetoothAvailable } from "@/services/bluetoothService";
++import { Badge } from "@/components/ui/badge";
++import {
++  Info, Moon, Sun, Radio, Bluetooth,
++  Thermometer, AlertTriangle,
++} from "lucide-react";
++import {
++  getSettings, saveSettings,
++  type AppSettings,
++} from "@/services/storageService";
++import {
++  ensureDemoSensors, removeDemoSensors,
++  startDemoLoop, stopDemoLoop,
++} from "@/services/demoService";
++import {
++  isBluetoothAvailable,
++  isAdvertisementScanSupported,
++} from "@/services/bluetoothService";
+ 
+ export const Route = createFileRoute("/settings")({
+   head: () => ({
+     meta: [
+-      { title: "Ustawienia — Termo" },
+-      { name: "description", content: "Tryb demo, motyw i informacje o aplikacji." },
++      { title: "Ustawienia — Termo ELA" },
++      { name: "description", content: "Konfiguracja aplikacji i czujników ELA." },
+     ],
+   }),
+   component: SettingsPage,
+@@ -22,15 +42,21 @@ export const Route = createFileRoute("/settings")({
+ function SettingsPage() {
+   const [settings, setSettings] = useState<AppSettings>(() => getSettings());
+   const [btAvailable, setBtAvailable] = useState<boolean | null>(null);
++  const [advSupported, setAdvSupported] = useState<boolean>(false);
+ 
+-  useEffect(() => { isBluetoothAvailable().then(setBtAvailable); }, []);
++  useEffect(() => {
++    isBluetoothAvailable().then(setBtAvailable);
++    setAdvSupported(isAdvertisementScanSupported());
++  }, []);
+ 
+   const update = (patch: Partial<AppSettings>) => {
+     const next = { ...settings, ...patch };
+     setSettings(next);
+     saveSettings(next);
+-    if (next.theme === "dark") document.documentElement.classList.add("dark");
+-    else document.documentElement.classList.remove("dark");
++
++    if (patch.theme !== undefined) {
++      document.documentElement.classList.toggle("dark", next.theme === "dark");
++    }
+     if (patch.demoMode === true) {
+       ensureDemoSensors();
+       startDemoLoop(() => {});
+@@ -41,59 +67,158 @@ function SettingsPage() {
+   };
+ 
+   return (
+-    <div className="space-y-6">
++    <div className="space-y-6 max-w-2xl">
+       <div>
+         <h1 className="font-display text-3xl font-bold">Ustawienia</h1>
+-        <p className="text-sm text-muted-foreground">Skonfiguruj aplikację pod siebie.</p>
++        <p className="text-sm text-muted-foreground">Skonfiguruj aplikację i czujniki ELA.</p>
+       </div>
+ 
++      {/* Demo */}
+       <Card>
+         <CardHeader>
+           <CardTitle>Tryb demo</CardTitle>
+-          <CardDescription>Generuje wirtualne czujniki — przetestuj bez prawdziwego Bluetooth.</CardDescription>
++          <CardDescription>
++            Generuje wirtualne czujniki ELA Blue Puck T — przetestuj bez prawdziwego sprzętu.
++          </CardDescription>
+         </CardHeader>
+         <CardContent className="flex items-center justify-between">
+           <Label htmlFor="demo">Włącz tryb demo</Label>
+-          <Switch id="demo" checked={settings.demoMode} onCheckedChange={(v) => update({ demoMode: v })} />
++          <Switch
++            id="demo"
++            checked={settings.demoMode}
++            onCheckedChange={(v) => update({ demoMode: v })}
++          />
+         </CardContent>
+       </Card>
+ 
++      {/* Motyw */}
+       <Card>
+         <CardHeader>
+           <CardTitle>Motyw</CardTitle>
+-          <CardDescription>Jasny lub ciemny.</CardDescription>
++          <CardDescription>Jasny lub ciemny interfejs.</CardDescription>
+         </CardHeader>
+         <CardContent className="flex items-center justify-between">
+           <Label htmlFor="theme" className="flex items-center gap-2">
+-            {settings.theme === "dark" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
++            {settings.theme === "dark"
++              ? <Moon className="h-4 w-4" />
++              : <Sun className="h-4 w-4" />}
+             Ciemny motyw
+           </Label>
+-          <Switch id="theme" checked={settings.theme === "dark"} onCheckedChange={(v) => update({ theme: v ? "dark" : "light" })} />
++          <Switch
++            id="theme"
++            checked={settings.theme === "dark"}
++            onCheckedChange={(v) => update({ theme: v ? "dark" : "light" })}
++          />
+         </CardContent>
+       </Card>
+ 
++      {/* Jednostka temperatury */}
+       <Card>
+-        <CardHeader><CardTitle>Bluetooth</CardTitle></CardHeader>
+-        <CardContent>
+-          <div className="text-sm">
+-            Status Web Bluetooth:{" "}
+-            <strong className={btAvailable ? "text-ok" : "text-destructive"}>
+-              {btAvailable === null ? "sprawdzanie..." : btAvailable ? "dostępne" : "niedostępne"}
+-            </strong>
++        <CardHeader>
++          <CardTitle className="flex items-center gap-2">
++            <Thermometer className="h-5 w-5" />
++            Jednostka temperatury
++          </CardTitle>
++        </CardHeader>
++        <CardContent className="flex items-center justify-between">
++          <Label htmlFor="tempunit" className="flex items-center gap-2">
++            Celsius / Fahrenheit
++            <Badge variant="secondary">{settings.tempUnit}</Badge>
++          </Label>
++          <Switch
++            id="tempunit"
++            checked={settings.tempUnit === "F"}
++            onCheckedChange={(v) => update({ tempUnit: v ? "F" : "C" })}
++          />
++        </CardContent>
++      </Card>
++
++      {/* Status Bluetooth */}
++      <Card>
++        <CardHeader>
++          <CardTitle className="flex items-center gap-2">
++            <Bluetooth className="h-5 w-5" />
++            Status Bluetooth
++          </CardTitle>
++        </CardHeader>
++        <CardContent className="space-y-3">
++          <div className="flex items-center justify-between text-sm">
++            <span>Web Bluetooth API</span>
++            <Badge
++              variant={btAvailable ? "default" : "destructive"}
++              className={btAvailable ? "bg-ok/15 text-ok border-ok/30" : undefined}
++            >
++              {btAvailable === null ? "sprawdzanie…"
++                : btAvailable ? "Dostępne"
++                : "Niedostępne"}
++            </Badge>
++          </div>
++
++          <div className="flex items-center justify-between text-sm">
++            <span className="flex items-center gap-1.5">
++              <Radio className="h-4 w-4 text-primary" />
++              Advertisement Scanning (ELA)
++            </span>
++            <Badge
++              variant={advSupported ? "default" : "outline"}
++              className={advSupported ? "bg-ok/15 text-ok border-ok/30" : undefined}
++            >
++              {advSupported ? "Dostępne" : "Wymagana flaga Chrome"}
++            </Badge>
+           </div>
+         </CardContent>
+       </Card>
+ 
++      {/* Instrukcja ELA */}
++      <Alert className="border-primary/30 bg-primary/5">
++        <Radio className="h-4 w-4 text-primary" />
++        <AlertTitle className="text-primary">Konfiguracja ELA Blue Puck T</AlertTitle>
++        <AlertDescription className="text-sm space-y-2 mt-2">
++          <p>
++            Blue Puck T nadaje wyłącznie przez BLE Advertisement.
++            Aby odebrać dane bez trwałego parowania, włącz w Chrome:
++          </p>
++          <code className="block rounded-lg bg-background px-3 py-2 text-xs font-mono border">
++            chrome://flags/#enable-web-bluetooth-scanning → Enabled
++          </code>
++          <p className="text-xs text-muted-foreground">
++            Wspierany: Chrome/Edge ≥ 79 na Windows, macOS, Linux, Android.
++            iOS nie wspiera Web Bluetooth — użyj trybu demo lub bramki BLE (RPi/ESP32).
++          </p>
++        </AlertDescription>
++      </Alert>
++
++      {/* Info BLE */}
+       <Alert>
+         <Info className="h-4 w-4" />
+-        <AlertTitle>Informacja techniczna</AlertTitle>
+-        <AlertDescription className="text-xs leading-relaxed">
+-          Niektóre przeglądarki i telefony mogą nie udostępniać adresu MAC urządzenia Bluetooth.
+-          W takim przypadku aplikacja użyje bezpiecznego identyfikatora device.id.
+-          Web Bluetooth działa w Chrome/Edge na Windows, macOS, Linux i Androidzie.
+-          iOS nie wspiera Web Bluetooth — użyj trybu demo lub w przyszłości wersji natywnej / gateway Raspberry Pi.
++        <AlertTitle>Jak działa ELA Blue Puck T</AlertTitle>
++        <AlertDescription className="text-xs leading-relaxed space-y-1 mt-1">
++          <p>
++            <strong>Protokół:</strong> BLE Advertisement (Manufacturer Specific Data, Company ID 0x0531).
++          </p>
++          <p>
++            <strong>Format danych:</strong> Typ produktu (1B) + Flagi (1B) + Temperatura int16 LE / 10°C (2B) + Bateria uint8 % (1B) + Licznik (2B).
++          </p>
++          <p>
++            <strong>Zasięg:</strong> do 30m (w terenie otwartym), bez przeszkód.
++          </p>
++          <p>
++            <strong>Żywotność baterii:</strong> do 2 lat przy standardowej częstotliwości nadawania.
++          </p>
+         </AlertDescription>
+       </Alert>
++
++      {!advSupported && btAvailable && (
++        <Alert variant="destructive">
++          <AlertTriangle className="h-4 w-4" />
++          <AlertTitle>Brak obsługi Advertisement Scanning</AlertTitle>
++          <AlertDescription className="text-sm">
++            Twoja przeglądarka nie wspiera nasłuchiwania BLE Advertisement.
++            Włącz flagę Chrome lub użyj trybu demo. Czujniki ELA Blue Puck T
++            nie będą działać bez tej funkcji.
++          </AlertDescription>
++        </Alert>
++      )}
+     </div>
+   );
+ }
+diff --git a/src/services/bluetoothService.ts b/src/services/bluetoothService.ts
+index 1a9b6cf..b43fc93 100644
+--- a/src/services/bluetoothService.ts
++++ b/src/services/bluetoothService.ts
+@@ -1,17 +1,54 @@
+-/**
+- * Web Bluetooth wrapper. Zaprojektowany tak, aby było łatwo
+- * zamienić go w przyszłości na natywne API (Capacitor / React Native)
+- * lub wspólny moduł działający przez gateway (Raspberry Pi / ESP32).
+- */
++// ============================================================
++// bluetoothService.ts
++//
++// Obsługa Web Bluetooth dla:
++//   1. ELA Blue Puck T — tryb Advertisement (watchAdvertisements)
++//   2. Standardowe GATT (inne czujniki)
++//
++// WYMAGANIA dla ELA Blue Puck T:
++//   Chrome/Edge Desktop lub Android z flagą:
++//   chrome://flags/#enable-web-bluetooth-scanning = Enabled
++//
++// ARCHITEKTURA:
++//   ELA Blue Puck T NIGDY nie nawiązuje połączenia GATT.
++//   Dane płyną wyłącznie przez pakiety Advertisement (broadcast).
++//   Aplikacja skanuje, parsuje ManufacturerData i zapisuje pomiary.
++// ============================================================
++
+ import type { Sensor, SensorProfile } from "@/types/sensor";
+-import { sensorProfiles } from "./sensorProfiles";
++import { ELA_COMPANY_ID, getProfile, sensorProfiles } from "./sensorProfiles";
+ 
+-type NavWithBT = Navigator & {
+-  bluetooth?: {
+-    requestDevice: (opts: unknown) => Promise<BluetoothDeviceLike>;
+-    getAvailability?: () => Promise<boolean>;
+-  };
+-};
++// ── Typy Web Bluetooth ──────────────────────────────────────
++
++interface NavWithBT extends Navigator {
++  bluetooth?: WebBluetoothAPI;
++}
++
++interface WebBluetoothAPI {
++  requestDevice: (opts: RequestDeviceOptions) => Promise<BluetoothDeviceLike>;
++  requestLEScan?: (opts: LEScanOptions) => Promise<BluetoothLEScan>;
++  getAvailability?: () => Promise<boolean>;
++  addEventListener: (type: string, listener: (e: BluetoothAdvertisementEvent) => void) => void;
++  removeEventListener: (type: string, listener: (e: BluetoothAdvertisementEvent) => void) => void;
++}
++
++interface RequestDeviceOptions {
++  acceptAllDevices?: boolean;
++  filters?: Array<{ services?: string[]; manufacturerData?: Array<{ companyIdentifier: number }> }>;
++  optionalServices?: string[];
++  optionalManufacturerData?: number[];
++}
++
++interface LEScanOptions {
++  acceptAllAdvertisements?: boolean;
++  filters?: Array<{ manufacturerData?: Array<{ companyIdentifier: number }> }>;
++  keepRepeatedDevices?: boolean;
++}
++
++interface BluetoothLEScan {
++  active: boolean;
++  stop: () => void;
++}
+ 
+ export interface BluetoothDeviceLike {
+   id: string;
+@@ -21,7 +58,9 @@ export interface BluetoothDeviceLike {
+     connect: () => Promise<BluetoothGATTServer>;
+     disconnect: () => void;
+   };
+-  addEventListener?: (type: string, listener: () => void) => void;
++  watchAdvertisements?: (opts?: { signal?: AbortSignal }) => Promise<void>;
++  addEventListener?: (type: string, listener: (e: BluetoothAdvertisementEvent) => void) => void;
++  removeEventListener?: (type: string, listener: (e: BluetoothAdvertisementEvent) => void) => void;
+ }
+ 
+ interface BluetoothGATTServer {
+@@ -36,35 +75,209 @@ interface BluetoothGATTCharacteristic {
+   readValue: () => Promise<DataView>;
+ }
+ 
++export interface BluetoothAdvertisementEvent extends Event {
++  device: BluetoothDeviceLike;
++  name?: string;
++  rssi?: number;
++  txPower?: number;
++  manufacturerData?: Map<number, DataView>;
++  serviceData?: Map<string, DataView>;
++}
++
++// ── Cache urządzeń ──────────────────────────────────────────
++
+ const deviceCache = new Map<string, BluetoothDeviceLike>();
++const activeLEScans = new Map<string, BluetoothLEScan>();
++const advertisementControllers = new Map<string, AbortController>();
++
++// ── Helpers ─────────────────────────────────────────────────
++
++const getBluetooth = (): WebBluetoothAPI | undefined =>
++  (navigator as NavWithBT).bluetooth;
+ 
+ export const isBluetoothAvailable = async (): Promise<boolean> => {
+   if (typeof navigator === "undefined") return false;
+-  const nav = navigator as NavWithBT;
+-  if (!nav.bluetooth) return false;
++  const bt = getBluetooth();
++  if (!bt) return false;
+   try {
+-    if (nav.bluetooth.getAvailability) return await nav.bluetooth.getAvailability();
++    if (bt.getAvailability) return await bt.getAvailability();
+     return true;
+   } catch {
+     return false;
+   }
+ };
+ 
++/**
++ * Sprawdza czy przeglądarka wspiera BLE Advertisement Scanning
++ * (potrzebne dla ELA Blue Puck T)
++ */
++export const isAdvertisementScanSupported = (): boolean => {
++  const bt = getBluetooth();
++  if (!bt) return false;
++  // requestLEScan → Chrome Scanning API (experimental)
++  // watchAdvertisements → per-device advertisement watching
++  return typeof (bt as unknown as { requestLEScan?: unknown }).requestLEScan === "function" ||
++    typeof (BluetoothDevice?.prototype as unknown as { watchAdvertisements?: unknown })?.watchAdvertisements === "function";
++};
++
++// ── Skanowanie ELA (Advertisement mode) ────────────────────
++
++export interface ELAScanCallbacks {
++  onDeviceFound: (
++    device: BluetoothDeviceLike,
++    data: { temperature?: number; humidity?: number; battery?: number; rssi?: number }
++  ) => void;
++  onError?: (err: Error) => void;
++}
++
++/**
++ * Skanuje BLE w poszukiwaniu czujników ELA przez requestDevice
++ * z opcjonalnym filtrem manufacturerData.
++ *
++ * Po znalezieniu urządzenia wywołuje watchAdvertisements() aby
++ * odbierać pakiety bez trwałego połączenia GATT.
++ */
++export const scanForELADevice = async (
++  callbacks: ELAScanCallbacks
++): Promise<BluetoothDeviceLike | null> => {
++  const bt = getBluetooth();
++  if (!bt) throw new Error("Web Bluetooth nie jest wspierany w tej przeglądarce.");
++
++  const optionalServices = sensorProfiles
++    .filter((p) => p.serviceUuid)
++    .map((p) => p.serviceUuid!);
++
++  // Żądamy dostępu do urządzenia ELA
++  // Używamy acceptAllDevices + optionalManufacturerData bo filtry manufacturerData
++  // bywają odrzucane przez starsze wersje Chrome
++  const device = await bt.requestDevice({
++    acceptAllDevices: true,
++    optionalServices,
++    optionalManufacturerData: [ELA_COMPANY_ID],
++  });
++
++  if (!device?.id) return null;
++  deviceCache.set(device.id, device);
++
++  // Jeśli urządzenie wspiera watchAdvertisements — użyj go
++  if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
++    await startAdvertisementWatch(device, callbacks);
++  }
++
++  return device;
++};
++
++/**
++ * Uruchamia nasłuchiwanie Advertisement dla danego urządzenia.
++ * Parsuje ManufacturerData ELA i wywołuje callback z temperaturą.
++ */
++export const startAdvertisementWatch = async (
++  device: BluetoothDeviceLike,
++  callbacks: ELAScanCallbacks
++): Promise<AbortController> => {
++  const controller = new AbortController();
++  advertisementControllers.set(device.id, controller);
++
++  const handleAdvertisement = (event: BluetoothAdvertisementEvent) => {
++    const rssi = event.rssi ?? undefined;
++
++    if (!event.manufacturerData) return;
++
++    // Szukamy danych ELA
++    const elaData = event.manufacturerData.get(ELA_COMPANY_ID);
++    if (!elaData) {
++      // Spróbuj każdy profil ELA
++      for (const [, data] of event.manufacturerData) {
++        const elaProfile = getProfile("ela-blue-puck-t");
++        if (elaProfile?.decodeAdvertisement) {
++          const result = elaProfile.decodeAdvertisement(data);
++          if (result.temperature !== undefined) {
++            callbacks.onDeviceFound(device, { ...result, rssi });
++            return;
++          }
++        }
++      }
++      return;
++    }
++
++    const profile = getProfile("ela-blue-puck-t");
++    if (!profile?.decodeAdvertisement) return;
++
++    try {
++      const decoded = profile.decodeAdvertisement(elaData);
++      callbacks.onDeviceFound(device, { ...decoded, rssi });
++    } catch (e) {
++      callbacks.onError?.(e instanceof Error ? e : new Error(String(e)));
++    }
++  };
++
++  if (device.addEventListener && typeof device.watchAdvertisements === "function") {
++    device.addEventListener("advertisementreceived", handleAdvertisement);
++    await device.watchAdvertisements({ signal: controller.signal });
++  }
++
++  controller.signal.addEventListener("abort", () => {
++    device.removeEventListener?.("advertisementreceived", handleAdvertisement);
++  });
++
++  return controller;
++};
++
++/**
++ * Zatrzymuje nasłuchiwanie advertisement dla urządzenia
++ */
++export const stopAdvertisementWatch = (deviceId: string): void => {
++  const controller = advertisementControllers.get(deviceId);
++  if (controller) {
++    controller.abort();
++    advertisementControllers.delete(deviceId);
++  }
++};
++
++/**
++ * Restartuje nasłuchiwanie dla zapisanego sensora ELA
++ */
++export const reconnectELASensor = async (
++  sensor: Sensor,
++  callbacks: ELAScanCallbacks
++): Promise<boolean> => {
++  const device = deviceCache.get(sensor.deviceId);
++  if (!device) return false;
++
++  stopAdvertisementWatch(device.id);
++
++  if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
++    await startAdvertisementWatch(device, callbacks);
++    return true;
++  }
++
++  return false;
++};
++
++// ── Skanowanie ogólne (GATT + ELA) ─────────────────────────
++
+ export const scanForSensor = async (): Promise<BluetoothDeviceLike | null> => {
+-  const nav = navigator as NavWithBT;
+-  if (!nav.bluetooth) throw new Error("Web Bluetooth nie jest wspierany w tej przeglądarce.");
++  const bt = getBluetooth();
++  if (!bt) throw new Error("Web Bluetooth nie jest wspierany w tej przeglądarce.");
+ 
+-  const optionalServices = sensorProfiles.map((p) => p.serviceUuid);
+-  const device = await nav.bluetooth.requestDevice({
++  const optionalServices = sensorProfiles
++    .filter((p) => p.serviceUuid)
++    .map((p) => p.serviceUuid!);
++
++  const device = await bt.requestDevice({
+     acceptAllDevices: true,
+     optionalServices,
++    optionalManufacturerData: [ELA_COMPANY_ID],
+   });
++
+   if (device?.id) deviceCache.set(device.id, device);
+   return device ?? null;
+ };
+ 
++// ── GATT (dla non-ELA czujników) ───────────────────────────
++
+ export const connectToSensor = async (
+-  device: BluetoothDeviceLike,
++  device: BluetoothDeviceLike
+ ): Promise<BluetoothGATTServer> => {
+   if (!device.gatt) throw new Error("Urządzenie nie udostępnia GATT.");
+   return device.gatt.connect();
+@@ -76,24 +289,41 @@ export const disconnectSensor = (device: BluetoothDeviceLike) => {
+ 
+ export const reconnectSensor = async (sensor: Sensor) => {
+   const device = deviceCache.get(sensor.deviceId);
+-  if (!device) throw new Error("Urządzenie nie znajduje się w cache. Wykonaj ponowne skanowanie.");
++  if (!device) throw new Error("Urządzenie nie w cache — wykonaj ponowne skanowanie.");
+   return connectToSensor(device);
+ };
+ 
+-export const parseSensorData = (
+-  rawData: DataView,
+-  profile: SensorProfile,
+-): { temperature?: number; humidity?: number } => profile.decode(rawData);
+-
+ export const readWithProfile = async (
+   device: BluetoothDeviceLike,
+-  profile: SensorProfile,
+-): Promise<{ temperature?: number; humidity?: number }> => {
++  profile: SensorProfile
++): Promise<{ temperature?: number; humidity?: number; battery?: number }> => {
++  if (profile.source === "advertisement") {
++    throw new Error("Ten profil używa Advertisement — nie GATT. Użyj watchAdvertisements.");
++  }
++  if (!profile.serviceUuid || !profile.characteristicUuid || !profile.decodeGatt) {
++    throw new Error("Profil GATT niekompletny.");
++  }
+   const server = await connectToSensor(device);
+   const service = await server.getPrimaryService(profile.serviceUuid);
+   const char = await service.getCharacteristic(profile.characteristicUuid);
+   const value = await char.readValue();
+-  return parseSensorData(value, profile);
++  return profile.decodeGatt(value);
+ };
+ 
+ export const getCachedDevice = (deviceId: string) => deviceCache.get(deviceId);
++
++// ── Autodetect profilu ELA po nazwie urządzenia ─────────────
++
++/**
++ * ELA Blue Puck T nadaje z nazwą "Blue Puck T" lub "BPUCK_T_XXXXXX"
++ * Blue Coin T: "Blue Coin T" lub "BCOIN_T_XXXXXX"
++ */
++export const detectELAProfile = (deviceName?: string | null): string | null => {
++  if (!deviceName) return null;
++  const name = deviceName.toLowerCase();
++  if (name.includes("puck t") || name.includes("bpuck_t")) return "ela-blue-puck-t";
++  if (name.includes("puck rht") || name.includes("bpuck_rht")) return "ela-blue-puck-rht";
++  if (name.includes("coin t") || name.includes("bcoin_t")) return "ela-blue-puck-t"; // analogiczny format
++  if (name.includes("coin rht") || name.includes("bcoin_rht")) return "ela-blue-puck-rht";
++  return null;
++};
+diff --git a/src/services/demoService.ts b/src/services/demoService.ts
+index c4884e8..44a006f 100644
+--- a/src/services/demoService.ts
++++ b/src/services/demoService.ts
+@@ -1,24 +1,33 @@
++// ============================================================
++// demoService.ts — symulowane czujniki ELA Blue Puck T
++// ============================================================
++
+ import type { Sensor } from "@/types/sensor";
+ import { addMeasurement, getSensors, upsertSensor } from "./storageService";
+ 
+ const seedRooms = [
+-  { room: "Salon", base: 22.4, humid: 45 },
+-  { room: "Garaż", base: 8.7, humid: 60 },
+-  { room: "Sypialnia", base: 20.8, humid: 50 },
+-  { room: "Kotłownia", base: 24.1, humid: 35 },
++  { room: "Salon",     base: 22.4, rssi: -62 },
++  { room: "Garaż",    base: 8.7,  rssi: -78 },
++  { room: "Sypialnia", base: 20.1, rssi: -55 },
++  { room: "Kotłownia", base: 24.6, rssi: -71 },
+ ];
+ 
+ export const ensureDemoSensors = () => {
+   const existing = getSensors().filter((s) => s.isDemo);
+   if (existing.length > 0) return;
++
+   seedRooms.forEach((r, i) => {
+     const sensor: Sensor = {
+       id: `demo-${i}`,
+-      bluetoothName: `DemoSensor-${i + 1}`,
++      bluetoothName: `Blue Puck T ${String(i + 1).padStart(6, "0")}`,
+       deviceId: `demo-device-${i}`,
++      macAddress: `AA:BB:CC:DD:EE:0${i}`,
+       roomName: r.room,
++      profileId: "ela-blue-puck-t",
+       status: "connected",
++      source: "ela-advertisement",
+       isDemo: true,
++      batteryLevel: 90 - i * 5,
+       minTempAlert: 10,
+       maxTempAlert: 28,
+     };
+@@ -29,7 +38,7 @@ export const ensureDemoSensors = () => {
+ export const removeDemoSensors = () => {
+   const list = getSensors().filter((s) => !s.isDemo);
+   if (typeof window !== "undefined") {
+-    localStorage.setItem("thermo.sensors.v1", JSON.stringify(list));
++    localStorage.setItem("thermo.sensors.v2", JSON.stringify(list));
+   }
+ };
+ 
+@@ -37,33 +46,37 @@ let demoInterval: ReturnType<typeof setInterval> | null = null;
+ 
+ export const startDemoLoop = (onUpdate: () => void) => {
+   if (demoInterval) return;
++
+   const tick = () => {
+     const sensors = getSensors().filter((s) => s.isDemo);
+     sensors.forEach((s) => {
+       const seed = seedRooms.find((r) => r.room === s.roomName);
+       const base = seed?.base ?? 21;
+-      const humid = seed?.humid ?? 45;
+-      const temperature = +(base + (Math.random() - 0.5) * 1.5).toFixed(1);
+-      const humidity = +(humid + (Math.random() - 0.5) * 4).toFixed(0);
++      const temperature = +(base + (Math.random() - 0.5) * 2).toFixed(1);
+       const now = new Date().toISOString();
++
+       upsertSensor({
+         ...s,
+         lastTemperature: temperature,
+-        lastHumidity: humidity,
+         lastReadAt: now,
++        lastRssi: seed?.rssi ? seed.rssi + Math.round((Math.random() - 0.5) * 6) : undefined,
++        batteryLevel: s.batteryLevel,
+         status: "connected",
+       });
++
+       addMeasurement({
+         id: `${s.id}-${Date.now()}-${Math.random()}`,
+         sensorId: s.id,
+         roomName: s.roomName,
+         temperature,
+-        humidity,
++        rssi: seed?.rssi,
++        batteryLevel: s.batteryLevel,
+         createdAt: now,
+       });
+     });
+     onUpdate();
+   };
++
+   tick();
+   demoInterval = setInterval(tick, 5000);
+ };
+diff --git a/src/services/sensorProfiles.ts b/src/services/sensorProfiles.ts
+index 4a83c0f..9bbdc08 100644
+--- a/src/services/sensorProfiles.ts
++++ b/src/services/sensorProfiles.ts
+@@ -1,7 +1,140 @@
++// ============================================================
++// sensorProfiles.ts
++//
++// ELA Blue Puck T — protokół Advertisement (BLE Scan)
++// ============================================================
++// Blue Puck T nadaje WYŁĄCZNIE przez BLE Advertisement.
++// NIE nawiązuje połączenia GATT. Dane są w pakiecie:
++//   Manufacturer Specific Data (typ 0xFF)
++//   Company ID: 0x0531 (ELA Innovation)
++//
++// Format danych Blue Puck T (payload po Company ID, lil-endian):
++//   Byte 0:    Typ produktu: 0x01 = Blue Puck T
++//   Byte 1:    Flagi statusu (bit 0 = alarm temp, bit 1 = tamper)
++//   Byte 2-3:  Temperatura: int16 little-endian, jednostka: 0.1°C
++//   Byte 4:    Poziom baterii: uint8, jednostka: 1% (0–100)
++//   Byte 5-6:  Licznik pakietów: uint16 little-endian
++//
++// Przykładowy raw payload (bez Company ID):
++//   01 00 CE 00 5A 12 00
++//   → Typ: Blue Puck T
++//   → Temp: 0x00CE = 206 → 20.6°C
++//   → Bat:  0x5A  = 90%
++//   → Ctr:  0x0012 = 18
++//
++// Uwaga: Web Bluetooth Scanning (chrome://flags/#enable-web-bluetooth-scanning)
++// musi być włączone, aby nasłuchiwać advertisement bez parowania.
++// ============================================================
++
+ import type { SensorProfile } from "@/types/sensor";
+ 
+-// Standardowy GATT Health Thermometer Service
+-// Service: 0x1809, Characteristic Temperature Measurement: 0x2A1C
++// ELA Innovation Company ID (Bluetooth SIG registered)
++export const ELA_COMPANY_ID = 0x0531;
++
++// Typy produktów ELA Blue Puck
++export const ELA_PRODUCT_TYPES: Record<number, string> = {
++  0x01: "Blue Puck T",
++  0x02: "Blue Puck RHT",
++  0x03: "Blue Puck MAG",
++  0x04: "Blue Puck MOV",
++  0x05: "Blue Coin T",
++  0x06: "Blue Coin RHT",
++};
++
++/**
++ * ELA Blue Puck T — wyłącznie temperatura, bez wilgotności
++ * Źródło: BLE Advertisement (Manufacturer Specific Data)
++ */
++const elaBluePuckT: SensorProfile = {
++  id: "ela-blue-puck-t",
++  name: "ELA Blue Puck T",
++  manufacturer: "ELA Innovation",
++  manufacturerId: ELA_COMPANY_ID,
++  supportsTemperature: true,
++  supportsHumidity: false,
++  supportsBattery: true,
++  source: "advertisement",
++  decodeAdvertisement: (data: DataView) => {
++    // data to Manufacturer Specific Data BEZ company ID (już wyciągnięty przez API)
++    // Lub z company ID jeśli przekazany raw — obsługujemy oba przypadki
++    let offset = 0;
++
++    // Sprawdź czy zaczyna się od Company ID (2 bajty LE = 0x0531)
++    if (data.byteLength >= 2) {
++      const maybeCompanyId = data.getUint16(0, true);
++      if (maybeCompanyId === ELA_COMPANY_ID) {
++        offset = 2; // pomiń company ID
++      }
++    }
++
++    if (data.byteLength < offset + 5) {
++      return {}; // za mało danych
++    }
++
++    // Byte 0 (po opcjonalnym Company ID): Typ produktu
++    const productType = data.getUint8(offset + 0);
++    if (productType !== 0x01) {
++      // To nie jest Blue Puck T — możliwe inne urządzenie ELA
++      // Zwracamy mimo to jeśli temperatura wygląda sensownie
++    }
++
++    // Byte 1: Flagi statusu (ignorujemy alarm bit — mapujemy na UI osobno)
++    // const flags = data.getUint8(offset + 1);
++
++    // Byte 2-3: Temperatura int16 LE, jednostka 0.1°C
++    const rawTemp = data.getInt16(offset + 2, true);
++    const temperature = rawTemp / 10;
++
++    // Byte 4: Bateria %
++    const batteryLevel = data.getUint8(offset + 4);
++
++    // Sanity check temperatury — Blue Puck T: zakres -40°C do +85°C
++    if (temperature < -60 || temperature > 100) {
++      return { batteryLevel };
++    }
++
++    return { temperature, battery: batteryLevel };
++  },
++};
++
++/**
++ * ELA Blue Puck RHT — temperatura + wilgotność
++ * Format: byte 2-3 = temp (int16, 0.1°C), byte 4-5 = hum (uint16, 0.1%)
++ */
++const elaBluePuckRHT: SensorProfile = {
++  id: "ela-blue-puck-rht",
++  name: "ELA Blue Puck RHT",
++  manufacturer: "ELA Innovation",
++  manufacturerId: ELA_COMPANY_ID,
++  supportsTemperature: true,
++  supportsHumidity: true,
++  supportsBattery: true,
++  source: "advertisement",
++  decodeAdvertisement: (data: DataView) => {
++    let offset = 0;
++    if (data.byteLength >= 2 && data.getUint16(0, true) === ELA_COMPANY_ID) {
++      offset = 2;
++    }
++    if (data.byteLength < offset + 6) return {};
++
++    const rawTemp = data.getInt16(offset + 2, true);
++    const rawHum = data.getUint16(offset + 4, true);
++    const battery = data.getUint8(offset + 6) || undefined;
++
++    const temperature = rawTemp / 10;
++    const humidity = rawHum / 10;
++
++    if (temperature < -60 || temperature > 100) return { humidity, battery };
++    if (humidity < 0 || humidity > 100) return { temperature, battery };
++
++    return { temperature, humidity, battery };
++  },
++};
++
++// ============================================================
++// Standardowe profile GATT (fallback dla innych czujników)
++// ============================================================
++
+ const healthThermometer: SensorProfile = {
+   id: "gatt-health-thermometer",
+   name: "Standard GATT Health Thermometer",
+@@ -10,9 +143,9 @@ const healthThermometer: SensorProfile = {
+   characteristicUuid: "temperature_measurement",
+   supportsTemperature: true,
+   supportsHumidity: false,
++  supportsBattery: false,
+   source: "gatt",
+-  decode: (data) => {
+-    // flags(1) + float32 IEEE-11073
++  decodeGatt: (data) => {
+     const flags = data.getUint8(0);
+     const mantissa =
+       data.getUint8(1) | (data.getUint8(2) << 8) | (data.getUint8(3) << 16);
+@@ -26,33 +159,21 @@ const healthThermometer: SensorProfile = {
+   },
+ };
+ 
+-// Environmental Sensing Service (ESS) — wiele DIY/ESP32
+-// Service: 0x181A, Char Temperature: 0x2A6E (sint16, 0.01°C), Humidity: 0x2A6F (uint16, 0.01%)
+ const environmentalSensing: SensorProfile = {
+   id: "gatt-ess-temperature",
+-  name: "Environmental Sensing (ESS) — Temperatura",
++  name: "Environmental Sensing (ESS)",
+   manufacturer: "Bluetooth SIG",
+   serviceUuid: "environmental_sensing",
+   characteristicUuid: "temperature",
+   supportsTemperature: true,
+-  supportsHumidity: false,
+-  source: "gatt",
+-  decode: (data) => ({ temperature: data.getInt16(0, true) / 100 }),
+-};
+-
+-const environmentalHumidity: SensorProfile = {
+-  id: "gatt-ess-humidity",
+-  name: "Environmental Sensing (ESS) — Wilgotność",
+-  manufacturer: "Bluetooth SIG",
+-  serviceUuid: "environmental_sensing",
+-  characteristicUuid: "humidity",
+-  supportsTemperature: false,
+   supportsHumidity: true,
++  supportsBattery: false,
+   source: "gatt",
+-  decode: (data) => ({ humidity: data.getUint16(0, true) / 100 }),
++  decodeGatt: (data) => ({
++    temperature: data.getInt16(0, true) / 100,
++  }),
+ };
+ 
+-// Xiaomi LYWSD03MMC (przykład — uproszczony)
+ const xiaomiLywsd03: SensorProfile = {
+   id: "xiaomi-lywsd03mmc",
+   name: "Xiaomi LYWSD03MMC",
+@@ -61,19 +182,25 @@ const xiaomiLywsd03: SensorProfile = {
+   characteristicUuid: "ebe0ccc1-7a0a-4b0c-8a1a-6ff2997da3a6",
+   supportsTemperature: true,
+   supportsHumidity: true,
++  supportsBattery: false,
+   source: "gatt",
+-  decode: (data) => ({
++  decodeGatt: (data) => ({
+     temperature: data.getInt16(0, true) / 100,
+     humidity: data.getUint8(2),
+   }),
+ };
+ 
+ export const sensorProfiles: SensorProfile[] = [
++  elaBluePuckT,
++  elaBluePuckRHT,
+   healthThermometer,
+   environmentalSensing,
+-  environmentalHumidity,
+   xiaomiLywsd03,
+ ];
+ 
+ export const getProfile = (id?: string): SensorProfile | undefined =>
+   sensorProfiles.find((p) => p.id === id);
++
++export const ELA_PROFILES = sensorProfiles.filter(
++  (p) => p.manufacturer === "ELA Innovation"
++);
+diff --git a/src/services/storageService.ts b/src/services/storageService.ts
+index 977acf9..e03b0c5 100644
+--- a/src/services/storageService.ts
++++ b/src/services/storageService.ts
+@@ -1,13 +1,13 @@
+-import type { Measurement, Sensor } from "@/types/sensor";
++// ============================================================
++// storageService.ts — localStorage z obsługą limitów i migracji
++// ============================================================
+ 
+-const SENSORS_KEY = "thermo.sensors.v1";
+-const MEASUREMENTS_KEY = "thermo.measurements.v1";
+-const SETTINGS_KEY = "thermo.settings.v1";
++import type { AppSettings, Measurement, Sensor } from "@/types/sensor";
+ 
+-export interface AppSettings {
+-  demoMode: boolean;
+-  theme: "light" | "dark";
+-}
++const SENSORS_KEY = "thermo.sensors.v2";
++const MEASUREMENTS_KEY = "thermo.measurements.v2";
++const SETTINGS_KEY = "thermo.settings.v2";
++const MAX_MEASUREMENTS = 10_000;
+ 
+ const isBrowser = () => typeof window !== "undefined";
+ 
+@@ -23,13 +23,24 @@ const read = <T>(key: string, fallback: T): T => {
+ 
+ const write = (key: string, value: unknown) => {
+   if (!isBrowser()) return;
+-  localStorage.setItem(key, JSON.stringify(value));
++  try {
++    localStorage.setItem(key, JSON.stringify(value));
++  } catch (e) {
++    // QuotaExceededError — trim measurements
++    if (e instanceof DOMException && e.name === "QuotaExceededError") {
++      const ms = getMeasurements().slice(-Math.floor(MAX_MEASUREMENTS / 2));
++      localStorage.setItem(MEASUREMENTS_KEY, JSON.stringify(ms));
++      localStorage.setItem(key, JSON.stringify(value));
++    }
++  }
+ };
+ 
+-// Sensors
++// ── Sensors ─────────────────────────────────────────────────
++
+ export const getSensors = (): Sensor[] => read<Sensor[]>(SENSORS_KEY, []);
+ export const saveSensors = (sensors: Sensor[]) => write(SENSORS_KEY, sensors);
+-export const upsertSensor = (sensor: Sensor) => {
++
++export const upsertSensor = (sensor: Sensor): Sensor[] => {
+   const list = getSensors();
+   const idx = list.findIndex((s) => s.id === sensor.id);
+   if (idx >= 0) list[idx] = sensor;
+@@ -37,27 +48,29 @@ export const upsertSensor = (sensor: Sensor) => {
+   saveSensors(list);
+   return list;
+ };
++
+ export const deleteSensor = (id: string) => {
+   saveSensors(getSensors().filter((s) => s.id !== id));
+-  const measurements = getMeasurements().filter((m) => m.sensorId !== id);
+-  write(MEASUREMENTS_KEY, measurements);
++  write(
++    MEASUREMENTS_KEY,
++    getMeasurements().filter((m) => m.sensorId !== id)
++  );
+ };
+ 
+-// Measurements
++// ── Measurements ────────────────────────────────────────────
++
+ export const getMeasurements = (): Measurement[] =>
+   read<Measurement[]>(MEASUREMENTS_KEY, []);
+ 
+ export const addMeasurement = (m: Measurement) => {
+   const list = getMeasurements();
+   list.push(m);
+-  // Cap history to last 5000
+-  const trimmed = list.slice(-5000);
+-  write(MEASUREMENTS_KEY, trimmed);
++  write(MEASUREMENTS_KEY, list.slice(-MAX_MEASUREMENTS));
+ };
+ 
+ export const getMeasurementsForSensor = (
+   sensorId: string,
+-  sinceMs?: number,
++  sinceMs?: number
+ ): Measurement[] => {
+   const all = getMeasurements().filter((m) => m.sensorId === sensorId);
+   if (!sinceMs) return all;
+@@ -65,7 +78,38 @@ export const getMeasurementsForSensor = (
+   return all.filter((m) => new Date(m.createdAt).getTime() >= cutoff);
+ };
+ 
+-// Settings
+-export const getSettings = (): AppSettings =>
+-  read<AppSettings>(SETTINGS_KEY, { demoMode: true, theme: "dark" });
++export const clearMeasurementsForSensor = (sensorId: string) => {
++  write(
++    MEASUREMENTS_KEY,
++    getMeasurements().filter((m) => m.sensorId !== sensorId)
++  );
++};
++
++// ── Settings ────────────────────────────────────────────────
++
++export const DEFAULT_SETTINGS: AppSettings = {
++  demoMode: true,
++  theme: "dark",
++  tempUnit: "C",
++  scanDuration: 10_000,
++  pollingInterval: 30_000,
++  alertSound: false,
++};
++
++export const getSettings = (): AppSettings => ({
++  ...DEFAULT_SETTINGS,
++  ...read<Partial<AppSettings>>(SETTINGS_KEY, {}),
++});
++
+ export const saveSettings = (s: AppSettings) => write(SETTINGS_KEY, s);
++
++// ── Helpers ──────────────────────────────────────────────────
++
++export const toDisplayTemp = (celsius: number, unit: "C" | "F"): number =>
++  unit === "F" ? +(celsius * 9 / 5 + 32).toFixed(1) : celsius;
++
++export const formatTemp = (celsius: number | undefined, unit: "C" | "F"): string => {
++  if (celsius == null) return "—";
++  const v = toDisplayTemp(celsius, unit);
++  return `${v.toFixed(1)}°${unit}`;
++};
+diff --git a/src/types/sensor.ts b/src/types/sensor.ts
+index d36ec5b..bcb50e6 100644
+--- a/src/types/sensor.ts
++++ b/src/types/sensor.ts
+@@ -1,4 +1,10 @@
+-export type SensorStatus = "connected" | "disconnected" | "error" | "unknown";
++// ============================================================
++// sensor.ts — typy danych dla czujników termicznych
++// Obsługuje ELA Blue Puck T + standardowe profile GATT
++// ============================================================
++
++export type SensorStatus = "connected" | "disconnected" | "scanning" | "error" | "unknown";
++export type SensorSource = "ela-advertisement" | "gatt" | "demo";
+ 
+ export interface Sensor {
+   id: string;
+@@ -7,15 +13,22 @@ export interface Sensor {
+   macAddress?: string;
+   roomName: string;
+   customName?: string;
+-  profileId?: string;
++  profileId: string;
+   lastTemperature?: number;
+   lastHumidity?: number;
+   lastReadAt?: string;
+   status: SensorStatus;
++  source: SensorSource;
++  // Alerty
+   minTempAlert?: number;
+   maxTempAlert?: number;
+   minHumidityAlert?: number;
+   maxHumidityAlert?: number;
++  // RSSI (siła sygnału BLE)
++  lastRssi?: number;
++  // Bateria ELA
++  batteryLevel?: number;
++  // Flagi
+   isDemo?: boolean;
+ }
+ 
+@@ -25,6 +38,8 @@ export interface Measurement {
+   roomName: string;
+   temperature: number;
+   humidity?: number;
++  rssi?: number;
++  batteryLevel?: number;
+   createdAt: string;
+ }
+ 
+@@ -32,10 +47,24 @@ export interface SensorProfile {
+   id: string;
+   name: string;
+   manufacturer?: string;
+-  serviceUuid: string;
+-  characteristicUuid: string;
++  serviceUuid?: string;
++  characteristicUuid?: string;
++  manufacturerId?: number; // BLE Manufacturer Specific Data company ID
+   supportsTemperature: boolean;
+   supportsHumidity: boolean;
++  supportsBattery: boolean;
+   source: "gatt" | "advertisement";
+-  decode: (data: DataView) => { temperature?: number; humidity?: number };
++  // decode dla GATT
++  decodeGatt?: (data: DataView) => { temperature?: number; humidity?: number; battery?: number };
++  // decode dla Advertisement (Manufacturer Specific Data)
++  decodeAdvertisement?: (data: DataView) => { temperature?: number; humidity?: number; battery?: number; rssi?: number };
++}
++
++export interface AppSettings {
++  demoMode: boolean;
++  theme: "light" | "dark";
++  tempUnit: "C" | "F";
++  scanDuration: number; // ms
++  pollingInterval: number; // ms — dla trybu GATT
++  alertSound: boolean;
+ }

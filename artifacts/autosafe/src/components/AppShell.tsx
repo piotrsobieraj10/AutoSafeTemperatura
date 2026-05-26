@@ -3,16 +3,16 @@ import { Activity, Home, LineChart, Settings as SettingsIcon } from "lucide-reac
 import { Toaster } from "@/components/ui/sonner";
 import { useEffect } from "react";
 import { getSettings } from "@/services/storageService";
-import { applyTheme, THEME_STORAGE_EVENT } from "@/services/themeService";
+import { applyTheme } from "@/services/themeService";
 import { ensureDemoSensors, startDemoLoop, stopDemoLoop } from "@/services/demoService";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/BrandMark";
 import { APP_NAME, APP_TAGLINE, APP_VERSION } from "@/config/app";
 
 const NAV = [
-  { to: "/", label: "Dom", icon: Home },
-  { to: "/sensors", label: "Czujniki", icon: Activity },
-  { to: "/history", label: "Historia", icon: LineChart },
+  { to: "/",        label: "Dom",        icon: Home },
+  { to: "/sensors", label: "Czujniki",   icon: Activity },
+  { to: "/history", label: "Historia",   icon: LineChart },
   { to: "/settings", label: "Ustawienia", icon: SettingsIcon },
 ] as const;
 
@@ -25,24 +25,13 @@ export function AppShell({ children }: AppShellProps) {
   const pathname = routerState.location.pathname;
 
   useEffect(() => {
-    const applySavedTheme = () => applyTheme(getSettings().theme);
-    applySavedTheme();
-
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    media.addEventListener("change", applySavedTheme);
-    window.addEventListener(THEME_STORAGE_EVENT, applySavedTheme);
-
-    const settings = getSettings();
-    if (settings.demoMode) {
+    const s = getSettings();
+    applyTheme(s.theme);
+    if (s.demoMode) {
       ensureDemoSensors();
       startDemoLoop(() => {});
     }
-
-    return () => {
-      media.removeEventListener("change", applySavedTheme);
-      window.removeEventListener(THEME_STORAGE_EVENT, applySavedTheme);
-      stopDemoLoop();
-    };
+    return () => { stopDemoLoop(); };
   }, []);
 
   return (
@@ -68,7 +57,7 @@ export function AppShell({ children }: AppShellProps) {
                     "flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
                     active
                       ? "bg-primary text-primary-foreground shadow-glow"
-                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                   )}
                 >
                   <Icon className="h-4 w-4" />
@@ -99,7 +88,7 @@ export function AppShell({ children }: AppShellProps) {
                 to={item.to}
                 className={cn(
                   "flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 text-xs",
-                  active ? "text-primary" : "text-muted-foreground",
+                  active ? "text-primary" : "text-muted-foreground"
                 )}
               >
                 <Icon className="h-5 w-5" />
