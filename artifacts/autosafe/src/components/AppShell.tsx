@@ -1,18 +1,17 @@
+// AppShell.tsx v2
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Activity, Home, LineChart, Settings as SettingsIcon } from "lucide-react";
+import { Activity, Home, LineChart, Radio, Settings as SettingsIcon } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { getSettings } from "@/services/storageService";
-import { applyTheme } from "@/services/themeService";
 import { ensureDemoSensors, startDemoLoop, stopDemoLoop } from "@/services/demoService";
+import { useSensors } from "@/hooks/useSensors";
 import { cn } from "@/lib/utils";
-import { BrandMark } from "@/components/BrandMark";
-import { APP_NAME, APP_TAGLINE, APP_VERSION } from "@/config/app";
 
 const NAV = [
-  { to: "/",        label: "Dom",        icon: Home },
-  { to: "/sensors", label: "Czujniki",   icon: Activity },
-  { to: "/history", label: "Historia",   icon: LineChart },
+  { to: "/",         label: "Dom",        icon: Home },
+  { to: "/sensors",  label: "Czujniki",   icon: Activity },
+  { to: "/history",  label: "Historia",   icon: LineChart },
   { to: "/settings", label: "Ustawienia", icon: SettingsIcon },
 ] as const;
 
@@ -20,48 +19,88 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
+const applyTheme = (theme: "light" | "dark" | "system") => {
+  const dark =
+    theme === "dark" ||
+    (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.classList.toggle("dark", dark);
+};
+
 export function AppShell({ children }: AppShellProps) {
   const routerState = useRouterState();
   const pathname = routerState.location.pathname;
+  const { alertSensors } = useSensors();
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     const s = getSettings();
     applyTheme(s.theme);
+
+    if (s.theme === "system") {
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      const handler = () => applyTheme("system");
+      mq.addEventListener("change", handler);
+      return () => {
+        mq.removeEventListener("change", handler);
+        stopDemoLoop();
+      };
+    }
+
     if (s.demoMode) {
       ensureDemoSensors();
       startDemoLoop(() => {});
     }
+
+    setMounted(true);
     return () => { stopDemoLoop(); };
   }, []);
 
+  useEffect(() => {
+    if (!mounted) {
+      setMounted(true);
+    }
+  }, [mounted]);
+
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-30 border-b border-border/50 bg-background/85 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <Link to="/" className="flex min-w-0 items-center gap-3">
-            <BrandMark compact />
-            <div className="min-w-0">
-              <div className="truncate font-display text-lg font-bold leading-none tracking-tight">{APP_NAME}</div>
-              <div className="hidden truncate text-xs text-muted-foreground sm:block">{APP_TAGLINE}</div>
+      <header className="sticky top-0 z-40 border-b border-border/50 bg-background/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3.5 sm:px-6">
+          <Link to="/" className="group flex items-center gap-3">
+            <div className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-hero shadow-glow">
+              <Radio className="h-5 w-5 text-white" />
+              {alertSensors.length > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-white shadow">
+                  {alertSensors.length}
+                </span>
+              )}
+            </div>
+            <div>
+              <div className="font-display text-base font-bold leading-none tracking-tight transition-colors group-hover:text-primary">
+                AutoSafe
+              </div>
+              <div className="text-[11px] text-muted-foreground">Monitor temperatury BLE</div>
             </div>
           </Link>
-          <nav className="hidden gap-1 md:flex">
-            {NAV.map((item) => {
-              const active = pathname === item.to;
-              const Icon = item.icon;
+
+          <nav className="hidden items-center gap-1 md:flex">
+            {NAV.map(({ to, label, icon: Icon }) => {
+              const active = pathname === to;
               return (
                 <Link
-                  key={item.to}
-                  to={item.to}
+                  key={to}
+                  to={to}
                   className={cn(
-                    "flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                    "relative flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200",
                     active
                       ? "bg-primary text-primary-foreground shadow-glow"
                       : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                   )}
                 >
                   <Icon className="h-4 w-4" />
-                  {item.label}
+                  {label}
+                  {to === "/sensors" && alertSensors.length > 0 && !active && (
+                    <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-destructive" />
+                  )}
                 </Link>
               );
             })}
@@ -69,37 +108,40 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 pb-24 pt-6 sm:px-6">
+      <main className="mx-auto max-w-6xl px-4 pb-28 pt-6 sm:px-6 page-enter">
         {children}
       </main>
 
-      <div className="pointer-events-none fixed bottom-20 right-3 z-20 hidden rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] text-muted-foreground backdrop-blur md:block">
-        {APP_VERSION}
-      </div>
-
-      <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-border/50 bg-background/90 backdrop-blur-xl md:hidden">
-        <div className="mx-auto flex max-w-6xl items-center justify-around px-2 py-2">
-          {NAV.map((item) => {
-            const active = pathname === item.to;
-            const Icon = item.icon;
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border/50 bg-background/90 backdrop-blur-xl md:hidden">
+        <div className="mx-auto flex max-w-sm items-center justify-around px-2 py-2">
+          {NAV.map(({ to, label, icon: Icon }) => {
+            const active = pathname === to;
             return (
               <Link
-                key={item.to}
-                to={item.to}
+                key={to}
+                to={to}
                 className={cn(
-                  "flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 text-xs",
+                  "relative flex flex-1 flex-col items-center gap-1 rounded-2xl py-2.5 text-xs font-medium transition-all",
                   active ? "text-primary" : "text-muted-foreground"
                 )}
               >
-                <Icon className="h-5 w-5" />
-                {item.label}
+                <div className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-xl transition-all",
+                  active && "bg-primary/15"
+                )}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                <span className={cn("text-[10px]", active && "font-semibold")}>{label}</span>
+                {to === "/sensors" && alertSensors.length > 0 && (
+                  <span className="absolute right-3 top-1.5 h-2 w-2 rounded-full bg-destructive" />
+                )}
               </Link>
             );
           })}
         </div>
       </nav>
 
-      <Toaster position="top-center" richColors />
+      <Toaster position="top-center" richColors expand />
     </div>
   );
 }

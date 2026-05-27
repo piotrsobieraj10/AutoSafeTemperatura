@@ -1,249 +1,222 @@
-// ============================================================
-// bluetoothService.ts — Web Bluetooth z obsługą ELA Advertisement
-// ============================================================
+// bluetoothService.ts v2
+import type { DecodedData, Sensor } from "@/types/sensor";
+import {
+  ALL_COMPANY_IDS,
+  detectProfileByCompanyId,
+  detectProfileByName,
+  getProfile,
+  sensorProfiles,
+} from "./sensorProfiles";
 
-import type { Sensor, SensorProfile } from "@/types/sensor";
-import { sensorProfiles } from "./sensorProfiles";
-import { ELA_COMPANY_ID } from "./sensorProfiles";
-
-type NavWithBT = Navigator & {
-  bluetooth?: {
-    requestDevice: (opts: unknown) => Promise<BluetoothDeviceLike>;
-    requestLEScan?: (opts: unknown) => Promise<BluetoothLEScan>;
-    getAvailability?: () => Promise<boolean>;
-  };
-};
-
-interface BluetoothLEScan {
-  stop: () => void;
+interface NavWithBT extends Navigator {
+  bluetooth?: BTAPI;
 }
-
-export interface BluetoothDeviceLike {
+interface BTAPI {
+  requestDevice: (o: RequestDeviceOptions) => Promise<BTDevice>;
+  getAvailability?: () => Promise<boolean>;
+}
+interface RequestDeviceOptions {
+  acceptAllDevices?: boolean;
+  filters?: object[];
+  optionalServices?: string[];
+  optionalManufacturerData?: number[];
+}
+export interface BTDevice {
   id: string;
   name?: string | null;
   gatt?: {
     connected: boolean;
-    connect: () => Promise<BluetoothGATTServer>;
+    connect: () => Promise<BTGATTServer>;
     disconnect: () => void;
   };
-  addEventListener?: (type: string, listener: (...args: unknown[]) => void) => void;
-  removeEventListener?: (type: string, listener: (...args: unknown[]) => void) => void;
-  watchAdvertisements?: (opts?: unknown) => Promise<void>;
-  unwatchAdvertisements?: () => void;
+  watchAdvertisements?: (o?: { signal?: AbortSignal }) => Promise<void>;
+  addEventListener?: (t: string, l: (e: BTAdvEvent) => void) => void;
+  removeEventListener?: (t: string, l: (e: BTAdvEvent) => void) => void;
 }
-
-interface BluetoothGATTServer {
-  getPrimaryService: (uuid: string | number) => Promise<BluetoothGATTService>;
+interface BTGATTServer {
+  getPrimaryService: (u: string) => Promise<BTGATTService>;
 }
-
-interface BluetoothGATTService {
-  getCharacteristic: (uuid: string | number) => Promise<BluetoothGATTCharacteristic>;
+interface BTGATTService {
+  getCharacteristic: (u: string) => Promise<BTGATTChar>;
 }
-
-interface BluetoothGATTCharacteristic {
+interface BTGATTChar {
   readValue: () => Promise<DataView>;
 }
-
-export interface ELAAdvertisementData {
-  temperature?: number;
-  humidity?: number;
-  battery?: number;
+export interface BTAdvEvent extends Event {
+  device: BTDevice;
+  name?: string;
   rssi?: number;
+  manufacturerData?: Map<number, DataView>;
+  serviceData?: Map<string, DataView>;
 }
 
-export interface ELAScanCallbacks {
-  onDeviceFound: (device: BluetoothDeviceLike, data: ELAAdvertisementData) => void;
-  onError: (error: Error) => void;
-}
+const deviceCache      = new Map<string, BTDevice>();
+const advControllers   = new Map<string, AbortController>();
 
-const deviceCache = new Map<string, BluetoothDeviceLike>();
-const activeWatchers = new Map<string, () => void>();
-
-const getBluetooth = () => (navigator as NavWithBT).bluetooth ?? null;
+const getBT = (): BTAPI | undefined => (navigator as NavWithBT).bluetooth;
 
 export const isBluetoothAvailable = async (): Promise<boolean> => {
-  if (typeof navigator === "undefined") return false;
-  const bt = getBluetooth();
+  const bt = getBT();
   if (!bt) return false;
-  try {
-    if (bt.getAvailability) return await bt.getAvailability();
-    return true;
-  } catch {
-    return false;
-  }
+  try { return bt.getAvailability ? await bt.getAvailability() : true; }
+  catch { return false; }
 };
 
 export const isAdvertisementScanSupported = (): boolean => {
-  const bt = getBluetooth();
-  if (!bt) return false;
-  return typeof bt.requestLEScan === "function";
+  if (typeof window === "undefined") return false;
+  const WinBT = (window as unknown as Record<string, unknown>)["BluetoothDevice"] as
+    | { prototype?: Record<string, unknown> }
+    | undefined;
+  return !!(WinBT?.prototype?.watchAdvertisements);
 };
 
-// ── ELA Advertisement Scan ─────────────────────────────────
+export interface ScanResult {
+  device: BTDevice;
+  detectedProfileId: string | null;
+  data: DecodedData;
+}
+export type ScanCallback = (result: ScanResult) => void;
 
-/**
- * Skanuje przez requestDevice z optionalManufacturerData,
- * a następnie nasłuchuje advertisementreceived na wybranym urządzeniu.
- */
-export const scanForELADevice = async (
-  callbacks: ELAScanCallbacks
-): Promise<BluetoothDeviceLike | null> => {
-  const bt = getBluetooth();
-  if (!bt) throw new Error("Web Bluetooth nie jest wspierany w tej przeglądarce.");
+export const scanForDevice = async (
+  onData: ScanCallback,
+  onError?: (e: Error) => void
+): Promise<BTDevice | null> => {
+  const bt = getBT();
+  if (!bt) throw new Error("Web Bluetooth niedostępne. Użyj Chrome lub Edge.");
 
   const optionalServices = sensorProfiles
-    .filter((p) => p.source === "gatt" && p.serviceUuid)
+    .filter((p) => p.serviceUuid && !p.serviceUuid.startsWith("0x"))
     .map((p) => p.serviceUuid!);
 
   const device = await bt.requestDevice({
     acceptAllDevices: true,
     optionalServices,
-    optionalManufacturerData: [ELA_COMPANY_ID],
+    optionalManufacturerData: ALL_COMPANY_IDS,
   });
 
   if (!device?.id) return null;
   deviceCache.set(device.id, device);
 
-  await startAdvertisementWatch(device, callbacks);
+  const nameProfile = detectProfileByName(device.name);
+  if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
+    await startAdvWatch(device, nameProfile, onData, onError);
+  }
+
   return device;
 };
 
-export const startAdvertisementWatch = async (
-  device: BluetoothDeviceLike,
-  callbacks: ELAScanCallbacks
-): Promise<void> => {
-  if (!device.addEventListener || !device.watchAdvertisements) return;
+export const startAdvWatch = async (
+  device: BTDevice,
+  hintProfileId: string | null,
+  onData: ScanCallback,
+  onError?: (e: Error) => void
+): Promise<AbortController> => {
+  const controller = new AbortController();
+  advControllers.set(device.id, controller);
 
-  const handler = (event: unknown) => {
-    const ev = event as {
-      rssi?: number;
-      manufacturerData?: Map<number, DataView>;
-    };
-    const mfData = ev.manufacturerData?.get(ELA_COMPANY_ID);
-    if (!mfData) return;
+  const handler = (event: BTAdvEvent) => {
+    const rssi = event.rssi ?? undefined;
+    if (!event.manufacturerData) return;
 
-    const profile = sensorProfiles.find(
-      (p) => p.source === "advertisement" && p.manufacturerId === ELA_COMPANY_ID
-    );
-    if (!profile?.decodeAdvertisement) return;
+    for (const [companyId, rawData] of event.manufacturerData) {
+      const profileId =
+        detectProfileByCompanyId(companyId, rawData) ??
+        hintProfileId;
 
-    try {
-      const decoded = profile.decodeAdvertisement(mfData);
-      callbacks.onDeviceFound(device, {
-        ...decoded,
-        rssi: ev.rssi,
-      });
-    } catch (e) {
-      callbacks.onError(e instanceof Error ? e : new Error(String(e)));
+      if (!profileId) continue;
+      const profile = getProfile(profileId);
+      if (!profile?.decodeAdvertisement) continue;
+
+      try {
+        const decoded = profile.decodeAdvertisement(rawData, rssi);
+        if (decoded.temperature !== undefined || decoded.humidity !== undefined) {
+          onData({ device, detectedProfileId: profileId, data: { ...decoded, rssi } });
+        }
+      } catch (e) {
+        onError?.(e instanceof Error ? e : new Error(String(e)));
+      }
     }
   };
 
-  device.addEventListener("advertisementreceived", handler);
-  activeWatchers.set(device.id, () => {
+  if (device.addEventListener && typeof device.watchAdvertisements === "function") {
+    device.addEventListener("advertisementreceived", handler);
+    try {
+      await device.watchAdvertisements({ signal: controller.signal });
+    } catch (e) {
+      console.warn("watchAdvertisements failed:", e);
+    }
+  }
+
+  controller.signal.addEventListener("abort", () => {
     device.removeEventListener?.("advertisementreceived", handler);
-    device.unwatchAdvertisements?.();
   });
 
-  try {
-    await device.watchAdvertisements();
-  } catch {
-    // Nie wszystkie przeglądarki wspierają watchAdvertisements — to OK
-  }
+  return controller;
 };
 
-export const stopAdvertisementWatch = (deviceId: string) => {
-  const stop = activeWatchers.get(deviceId);
-  if (stop) {
-    stop();
-    activeWatchers.delete(deviceId);
-  }
+export const stopAdvWatch = (deviceId: string) => {
+  advControllers.get(deviceId)?.abort();
+  advControllers.delete(deviceId);
 };
 
-/**
- * Wznawia nasłuchiwanie advertisement dla zapisanego urządzenia.
- */
-export const reconnectELASensor = async (
+export const readGATT = async (
+  device: BTDevice,
+  serviceUuid: string,
+  charUuid: string
+): Promise<DataView> => {
+  if (!device.gatt) throw new Error("Urządzenie nie udostępnia GATT.");
+  const server  = await device.gatt.connect();
+  const service = await server.getPrimaryService(serviceUuid);
+  const char    = await service.getCharacteristic(charUuid);
+  return char.readValue();
+};
+
+export const readSensorGATT = async (
+  device: BTDevice,
+  profileId: string
+): Promise<DecodedData> => {
+  const profile = getProfile(profileId);
+  if (!profile?.serviceUuid || !profile?.characteristicUuid || !profile.decodeGatt) {
+    throw new Error("Profil GATT niekompletny.");
+  }
+  const data = await readGATT(device, profile.serviceUuid, profile.characteristicUuid);
+  return profile.decodeGatt(data);
+};
+
+export const disconnectGATT = (device: BTDevice) => device.gatt?.disconnect();
+
+export const reconnectSensor = async (
   sensor: Sensor,
-  callbacks: ELAScanCallbacks
+  onData: ScanCallback,
+  onError?: (e: Error) => void
 ): Promise<boolean> => {
   const device = deviceCache.get(sensor.deviceId);
   if (!device) return false;
 
-  stopAdvertisementWatch(device.id);
+  const profile = getProfile(sensor.profileId);
+  if (!profile) return false;
 
-  if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
-    await startAdvertisementWatch(device, callbacks);
-    return true;
+  if (profile.source === "advertisement") {
+    stopAdvWatch(device.id);
+    if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
+      await startAdvWatch(device, sensor.profileId, onData, onError);
+      return true;
+    }
+    return false;
   }
+
+  if (profile.source === "gatt") {
+    try {
+      const data = await readSensorGATT(device, sensor.profileId);
+      onData({ device, detectedProfileId: sensor.profileId, data });
+      return true;
+    } catch (e) {
+      onError?.(e instanceof Error ? e : new Error(String(e)));
+      return false;
+    }
+  }
+
   return false;
 };
 
-// ── Ogólne skanowanie (GATT + advertisement) ───────────────
-
-export const scanForSensor = async (): Promise<BluetoothDeviceLike | null> => {
-  const bt = getBluetooth();
-  if (!bt) throw new Error("Web Bluetooth nie jest wspierany w tej przeglądarce.");
-
-  const optionalServices = sensorProfiles
-    .filter((p) => p.source === "gatt" && p.serviceUuid)
-    .map((p) => p.serviceUuid!);
-
-  const device = await bt.requestDevice({
-    acceptAllDevices: true,
-    optionalServices,
-    optionalManufacturerData: [ELA_COMPANY_ID],
-  });
-
-  if (device?.id) deviceCache.set(device.id, device);
-  return device ?? null;
-};
-
-// ── GATT (dla czujników nie-ELA) ───────────────────────────
-
-export const connectToSensor = async (
-  device: BluetoothDeviceLike
-): Promise<BluetoothGATTServer> => {
-  if (!device.gatt) throw new Error("Urządzenie nie udostępnia GATT.");
-  return device.gatt.connect();
-};
-
-export const disconnectSensor = (device: BluetoothDeviceLike) => {
-  device.gatt?.disconnect();
-};
-
-export const reconnectSensor = async (sensor: Sensor) => {
-  const device = deviceCache.get(sensor.deviceId);
-  if (!device) throw new Error("Urządzenie nie w cache — wykonaj ponowne skanowanie.");
-  return connectToSensor(device);
-};
-
-export const readWithProfile = async (
-  device: BluetoothDeviceLike,
-  profile: SensorProfile
-): Promise<{ temperature?: number; humidity?: number; battery?: number }> => {
-  if (profile.source === "advertisement") {
-    throw new Error("Ten profil używa Advertisement — nie GATT. Użyj watchAdvertisements.");
-  }
-  if (!profile.serviceUuid || !profile.characteristicUuid || !profile.decodeGatt) {
-    throw new Error("Profil GATT niekompletny.");
-  }
-  const server = await connectToSensor(device);
-  const service = await server.getPrimaryService(profile.serviceUuid);
-  const char = await service.getCharacteristic(profile.characteristicUuid);
-  const value = await char.readValue();
-  return profile.decodeGatt(value);
-};
-
-export const getCachedDevice = (deviceId: string) => deviceCache.get(deviceId);
-
-// ── Autodetect profilu ELA po nazwie urządzenia ─────────────
-
-export const detectELAProfile = (deviceName?: string | null): string | null => {
-  if (!deviceName) return null;
-  const name = deviceName.toLowerCase();
-  if (name.includes("puck t") || name.includes("bpuck_t")) return "ela-blue-puck-t";
-  if (name.includes("puck rht") || name.includes("bpuck_rht")) return "ela-blue-puck-rht";
-  if (name.includes("coin t") || name.includes("bcoin_t")) return "ela-blue-puck-t";
-  if (name.includes("coin rht") || name.includes("bcoin_rht")) return "ela-blue-puck-rht";
-  return null;
-};
+export const getCachedDevice = (id: string) => deviceCache.get(id);

@@ -1,5 +1,6 @@
+// readingService.ts v2 — thin helper used by legacy callers
 import type { Measurement, Sensor } from "@/types/sensor";
-import { getCachedDevice, readWithProfile } from "@/services/bluetoothService";
+import { getCachedDevice, readSensorGATT } from "@/services/bluetoothService";
 import { getProfile } from "@/services/sensorProfiles";
 import { addMeasurement, upsertSensor } from "@/services/storageService";
 
@@ -25,11 +26,10 @@ export const saveReading = (
   const updated: Sensor = {
     ...sensor,
     lastTemperature: payload.temperature ?? sensor.lastTemperature,
-    lastHumidity: payload.humidity ?? sensor.lastHumidity,
-    lastReadAt: now,
-    status: "connected",
+    lastHumidity:    payload.humidity    ?? sensor.lastHumidity,
+    lastReadAt:      now,
+    status:          "connected",
   };
-
   upsertSensor(updated);
   if (payload.temperature != null) {
     addMeasurement(buildMeasurement(updated, payload.temperature, payload.humidity, now));
@@ -55,7 +55,7 @@ export const readSensorNow = async (sensor: Sensor): Promise<Sensor> => {
   }
 
   try {
-    const payload = await readWithProfile(device, profile);
+    const payload = await readSensorGATT(device, sensor.profileId);
     if (payload.temperature == null && payload.humidity == null) {
       throw new Error("Czujnik odpowiedział, ale profil nie zwrócił temperatury ani wilgotności.");
     }

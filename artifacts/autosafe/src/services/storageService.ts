@@ -1,82 +1,74 @@
-// ============================================================
-// storageService.ts — localStorage z obsługą limitów i migracji
-// ============================================================
+// storageService.ts v2
+import type { AlertEvent, AppSettings, Measurement, Sensor } from "@/types/sensor";
 
-import type { AppSettings, Measurement, Sensor } from "@/types/sensor";
 export type { AppSettings } from "@/types/sensor";
-import { APP_VERSION } from "@/config/app";
 
-const SENSORS_KEY = "thermo.sensors.v2";
-const MEASUREMENTS_KEY = "thermo.measurements.v2";
-const SETTINGS_KEY = "thermo.settings.v2";
-const MAX_MEASUREMENTS = 10_000;
+const K = {
+  SENSORS:      "thermo.v2.sensors",
+  MEASUREMENTS: "thermo.v2.measurements",
+  SETTINGS:     "thermo.v2.settings",
+  ALERTS:       "thermo.v2.alerts",
+};
+
+const MAX_MEASUREMENTS = 20_000;
+const MAX_ALERTS       = 500;
 
 const isBrowser = () => typeof window !== "undefined";
 
-const read = <T>(key: string, fallback: T): T => {
-  if (!isBrowser()) return fallback;
+const read = <T>(key: string, fb: T): T => {
+  if (!isBrowser()) return fb;
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as T;
-    if (Array.isArray(fallback)) return (Array.isArray(parsed) ? parsed : fallback) as T;
-    if (fallback && typeof fallback === "object" && parsed && typeof parsed === "object") {
-      return { ...fallback, ...parsed } as T;
-    }
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
+    const r = localStorage.getItem(key);
+    return r ? JSON.parse(r) as T : fb;
+  } catch { return fb; }
 };
 
-const write = (key: string, value: unknown) => {
+const write = (key: string, val: unknown) => {
   if (!isBrowser()) return;
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(key, JSON.stringify(val));
     window.dispatchEvent(new StorageEvent("storage", { key }));
   } catch (e) {
     if (e instanceof DOMException && e.name === "QuotaExceededError") {
       const ms = getMeasurements().slice(-Math.floor(MAX_MEASUREMENTS / 2));
-      localStorage.setItem(MEASUREMENTS_KEY, JSON.stringify(ms));
-      localStorage.setItem(key, JSON.stringify(value));
+      localStorage.setItem(K.MEASUREMENTS, JSON.stringify(ms));
+      try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
     }
   }
 };
 
 // ── Sensors ─────────────────────────────────────────────────
+export const getSensors  = (): Sensor[] => read<Sensor[]>(K.SENSORS, []);
+export const saveSensors = (s: Sensor[]) => write(K.SENSORS, s);
 
-export const getSensors = (): Sensor[] => read<Sensor[]>(SENSORS_KEY, []);
-export const saveSensors = (sensors: Sensor[]) => write(SENSORS_KEY, sensors);
-
-export const upsertSensor = (sensor: Sensor): Sensor[] => {
+export const upsertSensor = (s: Sensor): void => {
   const list = getSensors();
-  const idx = list.findIndex((s) => s.id === sensor.id);
-  if (idx >= 0) list[idx] = sensor;
-  else list.push(sensor);
+  const i = list.findIndex((x) => x.id === s.id);
+  i >= 0 ? (list[i] = s) : list.push(s);
   saveSensors(list);
-  return list;
 };
 
-export const deleteSensor = (id: string) => {
+export const deleteSensor = (id: string): void => {
   saveSensors(getSensors().filter((s) => s.id !== id));
-  write(
-    MEASUREMENTS_KEY,
-    getMeasurements().filter((m) => m.sensorId !== id)
-  );
+  write(K.MEASUREMENTS, getMeasurements().filter((m) => m.sensorId !== id));
+};
+
+export const patchSensor = (id: string, patch: Partial<Sensor>): void => {
+  const s = getSensors().find((x) => x.id === id);
+  if (s) upsertSensor({ ...s, ...patch });
 };
 
 // ── Measurements ────────────────────────────────────────────
-
 export const getMeasurements = (): Measurement[] =>
-  read<Measurement[]>(MEASUREMENTS_KEY, []);
+  read<Measurement[]>(K.MEASUREMENTS, []);
 
-export const saveMeasurements = (measurements: Measurement[]) =>
-  write(MEASUREMENTS_KEY, measurements);
+export const saveMeasurements = (ms: Measurement[]) =>
+  write(K.MEASUREMENTS, ms);
 
-export const addMeasurement = (m: Measurement) => {
+export const addMeasurement = (m: Measurement): void => {
   const list = getMeasurements();
   list.push(m);
-  write(MEASUREMENTS_KEY, list.slice(-MAX_MEASUREMENTS));
+  write(K.MEASUREMENTS, list.slice(-MAX_MEASUREMENTS));
 };
 
 export const getMeasurementsForSensor = (
@@ -89,86 +81,70 @@ export const getMeasurementsForSensor = (
   return all.filter((m) => new Date(m.createdAt).getTime() >= cutoff);
 };
 
-export const clearMeasurements = () => saveMeasurements([]);
-
-export const clearMeasurementsForSensor = (sensorId: string) => {
-  write(
-    MEASUREMENTS_KEY,
-    getMeasurements().filter((m) => m.sensorId !== sensorId)
-  );
+export const clearMeasurements = (sensorId: string): void => {
+  write(K.MEASUREMENTS, getMeasurements().filter((m) => m.sensorId !== sensorId));
 };
 
+export const clearAllMeasurements = (): void => write(K.MEASUREMENTS, []);
+
 export const buildMeasurementsCsv = () => {
-  const header = ["data", "czujnik_id", "pomieszczenie", "temperatura_c", "wilgotnosc_pct", "rssi_dbm", "bateria_pct"];
+  const header = ["data", "czujnik_id", "pomieszczenie", "temperatura_c", "wilgotnosc_pct", "cisnienie_hpa", "rssi_dbm", "bateria_pct"];
   const rows = getMeasurements().map((m) => [
-    m.createdAt,
-    m.sensorId,
-    m.roomName,
+    m.createdAt, m.sensorId, m.roomName,
     String(m.temperature),
-    m.humidity == null ? "" : String(m.humidity),
-    m.rssi == null ? "" : String(m.rssi),
+    m.humidity  == null ? "" : String(m.humidity),
+    m.pressure  == null ? "" : String(m.pressure),
+    m.rssi      == null ? "" : String(m.rssi),
     m.batteryLevel == null ? "" : String(m.batteryLevel),
   ]);
   return [header, ...rows]
-    .map((row) => row.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(","))
+    .map((row) => row.map((c) => `"${c.replaceAll('"', '""')}"`).join(","))
     .join("\n");
 };
 
-// ── Settings ────────────────────────────────────────────────
+// ── Alerts ───────────────────────────────────────────────────
+export const getAlerts        = (): AlertEvent[] => read<AlertEvent[]>(K.ALERTS, []);
+export const addAlert         = (a: AlertEvent): void => {
+  const list = getAlerts();
+  list.push(a);
+  write(K.ALERTS, list.slice(-MAX_ALERTS));
+};
+export const acknowledgeAlert = (id: string): void => {
+  write(K.ALERTS, getAlerts().map((a) => a.id === id ? { ...a, acknowledged: true } : a));
+};
+export const clearAlerts      = (): void => write(K.ALERTS, []);
 
+// ── Settings ─────────────────────────────────────────────────
 export const DEFAULT_SETTINGS: AppSettings = {
-  demoMode: true,
-  theme: "dark",
-  tempUnit: "C",
-  scanDuration: 10_000,
-  pollingInterval: 30_000,
-  alertSound: false,
+  demoMode:          true,
+  theme:             "dark",
+  tempUnit:          "C",
+  scanDuration:      10_000,
+  pollingInterval:   30_000,
+  alertSound:        false,
+  alertVibration:    true,
+  chartDefaultRange: "24h",
+  maxMeasurements:   MAX_MEASUREMENTS,
 };
 
-export const getSettings = (): AppSettings => ({
-  ...DEFAULT_SETTINGS,
-  ...read<Partial<AppSettings>>(SETTINGS_KEY, {}),
-});
+export const getSettings   = (): AppSettings =>
+  ({ ...DEFAULT_SETTINGS, ...read<Partial<AppSettings>>(K.SETTINGS, {}) });
 
-export const saveSettings = (s: AppSettings) => write(SETTINGS_KEY, s);
-
-// ── Backup / Restore ─────────────────────────────────────────
-
-export interface AppBackup {
-  version: string;
-  exportedAt: string;
-  sensors: Sensor[];
-  measurements: Measurement[];
-  settings: AppSettings;
-}
-
-export const buildBackup = (): AppBackup => ({
-  version: APP_VERSION,
-  exportedAt: new Date().toISOString(),
-  sensors: getSensors(),
-  measurements: getMeasurements(),
-  settings: getSettings(),
-});
-
-export const importBackup = (backup: Partial<AppBackup>) => {
-  if (Array.isArray(backup.sensors)) saveSensors(backup.sensors);
-  if (Array.isArray(backup.measurements)) saveMeasurements(backup.measurements);
-  if (backup.settings) saveSettings({ ...DEFAULT_SETTINGS, ...backup.settings });
-};
-
-export const resetLocalData = () => {
-  saveSensors([]);
-  saveMeasurements([]);
-  saveSettings(DEFAULT_SETTINGS);
-};
+export const saveSettings  = (s: AppSettings) => write(K.SETTINGS, s);
+export const patchSettings = (patch: Partial<AppSettings>) =>
+  saveSettings({ ...getSettings(), ...patch });
 
 // ── Helpers ──────────────────────────────────────────────────
+export const toDisplayTemp = (c: number, unit: "C" | "F") =>
+  unit === "F" ? +(c * 9 / 5 + 32).toFixed(1) : c;
 
-export const toDisplayTemp = (celsius: number, unit: "C" | "F"): number =>
-  unit === "F" ? +(celsius * 9 / 5 + 32).toFixed(1) : celsius;
-
-export const formatTemp = (celsius: number | undefined, unit: "C" | "F"): string => {
-  if (celsius == null) return "—";
-  const v = toDisplayTemp(celsius, unit);
-  return `${v.toFixed(1)}°${unit}`;
+export const formatTemp = (c: number | undefined, unit: "C" | "F"): string => {
+  if (c == null) return "—";
+  return `${toDisplayTemp(c, unit).toFixed(1)}°${unit}`;
 };
+
+export const formatHumidity = (h: number | undefined): string =>
+  h == null ? "—" : `${h.toFixed(0)}%`;
+
+export const formatPressure = (p: number | undefined): string =>
+  p == null ? "—" : `${p.toFixed(1)} hPa`;

@@ -1,42 +1,41 @@
-// ============================================================
-// demoService.ts — symulowane czujniki ELA Blue Puck T
-// ============================================================
-
+// demoService.ts v2
 import type { Sensor } from "@/types/sensor";
-import { addMeasurement, getSensors, saveSensors, upsertSensor } from "./storageService";
+import { addMeasurement, getSensors, upsertSensor } from "./storageService";
 
-const seedRooms = [
-  { room: "Salon",     base: 22.4, rssi: -62 },
-  { room: "Garaż",    base: 8.7,  rssi: -78 },
-  { room: "Sypialnia", base: 20.1, rssi: -55 },
-  { room: "Kotłownia", base: 24.6, rssi: -71 },
+const DEMO_SENSORS: Omit<Sensor, "id" | "deviceId" | "status" | "isDemo">[] = [
+  { bluetoothName: "BPUCK_T_000001", roomName: "Salon",     profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 87, minTempAlert: 15, maxTempAlert: 28 },
+  { bluetoothName: "BPUCK_T_000002", roomName: "Sypialnia", profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 94, minTempAlert: 16, maxTempAlert: 24 },
+  { bluetoothName: "BPUCK_T_000003", roomName: "Garaż",     profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 62, minTempAlert: 2,  maxTempAlert: 35 },
+  { bluetoothName: "BPUCK_RHT_0001", roomName: "Łazienka",  profileId: "ela-blue-puck-rht", source: "ela-advertisement", batteryLevel: 78, minHumidityAlert: 40, maxHumidityAlert: 70 },
+  { bluetoothName: "RuuviTag_A1B2",  roomName: "Piwnica",   profileId: "ruuvi-tag-raw2",    source: "ela-advertisement", batteryLevel: 91 },
+  { bluetoothName: "GVH5074_FF11",   roomName: "Ogród",     profileId: "govee-h5074",       source: "ela-advertisement", batteryLevel: 45 },
 ];
+
+const BASE_TEMPS: Record<string, number> = {
+  Salon: 22.4, Sypialnia: 19.8, "Garaż": 7.3,
+  "Łazienka": 23.5, Piwnica: 13.1, "Ogród": 11.4,
+};
 
 export const ensureDemoSensors = () => {
   const existing = getSensors().filter((s) => s.isDemo);
   if (existing.length > 0) return;
-
-  seedRooms.forEach((r, i) => {
-    const sensor: Sensor = {
+  DEMO_SENSORS.forEach((tmpl, i) => {
+    upsertSensor({
+      ...tmpl,
       id: `demo-${i}`,
-      bluetoothName: `Blue Puck T ${String(i + 1).padStart(6, "0")}`,
       deviceId: `demo-device-${i}`,
-      macAddress: `AA:BB:CC:DD:EE:0${i}`,
-      roomName: r.room,
-      profileId: "ela-blue-puck-t",
       status: "connected",
-      source: "ela-advertisement",
       isDemo: true,
-      batteryLevel: 90 - i * 5,
-      minTempAlert: 10,
-      maxTempAlert: 28,
-    };
-    upsertSensor(sensor);
+    } as Sensor);
   });
 };
 
 export const removeDemoSensors = () => {
-  saveSensors(getSensors().filter((s) => !s.isDemo));
+  const kept = getSensors().filter((s) => !s.isDemo);
+  if (typeof window !== "undefined") {
+    localStorage.setItem("thermo.v2.sensors", JSON.stringify(kept));
+    window.dispatchEvent(new StorageEvent("storage", { key: "thermo.v2.sensors" }));
+  }
 };
 
 let demoInterval: ReturnType<typeof setInterval> | null = null;
@@ -47,29 +46,19 @@ export const startDemoLoop = (onUpdate: () => void) => {
   const tick = () => {
     const sensors = getSensors().filter((s) => s.isDemo);
     sensors.forEach((s) => {
-      const seed = seedRooms.find((r) => r.room === s.roomName);
-      const base = seed?.base ?? 21;
-      const temperature = +(base + (Math.random() - 0.5) * 2).toFixed(1);
-      const now = new Date().toISOString();
-
-      upsertSensor({
-        ...s,
-        lastTemperature: temperature,
-        lastReadAt: now,
-        lastRssi: seed?.rssi ? seed.rssi + Math.round((Math.random() - 0.5) * 6) : undefined,
-        batteryLevel: s.batteryLevel,
-        status: "connected",
-      });
-
-      addMeasurement({
-        id: `${s.id}-${Date.now()}-${Math.random()}`,
-        sensorId: s.id,
-        roomName: s.roomName,
-        temperature,
-        rssi: seed?.rssi,
-        batteryLevel: s.batteryLevel,
-        createdAt: now,
-      });
+      const base = BASE_TEMPS[s.roomName] ?? 20;
+      const temp = +(base + (Math.random() - 0.5) * 3).toFixed(2);
+      const profileId = s.profileId;
+      const hum = (profileId === "ela-blue-puck-rht" || profileId === "govee-h5074" || profileId === "ruuvi-tag-raw2")
+        ? +(55 + (Math.random() - 0.5) * 20).toFixed(1)
+        : undefined;
+      const pres = profileId === "ruuvi-tag-raw2"
+        ? +(1013 + (Math.random() - 0.5) * 8).toFixed(1)
+        : undefined;
+      const rssi = -60 + Math.round((Math.random() - 0.5) * 20);
+      const now  = new Date().toISOString();
+      upsertSensor({ ...s, lastTemperature: temp, lastHumidity: hum, lastPressure: pres, lastRssi: rssi, lastReadAt: now, status: "connected" });
+      addMeasurement({ id: `${s.id}-${Date.now()}`, sensorId: s.id, roomName: s.roomName, temperature: temp, humidity: hum, pressure: pres, rssi, batteryLevel: s.batteryLevel, createdAt: now });
     });
     onUpdate();
   };

@@ -1,170 +1,219 @@
-import type { Sensor } from "@/types/sensor";
-import { formatTemp, getSettings } from "@/services/storageService";
+// SensorCard.tsx v2
+import type { Sensor, TempZone } from "@/types/sensor";
+import { getTempZone, ZONE_LABELS } from "@/types/sensor";
+import { formatHumidity, formatPressure, formatTemp, getSettings } from "@/services/storageService";
+import { getProfile } from "@/services/sensorProfiles";
 import {
-  Bluetooth, BluetoothOff, Droplets, ThermometerSnowflake,
-  ThermometerSun, AlertTriangle, BatteryMedium, BatteryLow,
-  BatteryFull, Wifi, WifiOff, Radio,
+  Activity, BatteryFull, BatteryLow, BatteryMedium,
+  Bell, BellOff, CircleDot, Droplets, Gauge, Leaf,
+  Pin, Radio, Thermometer, ThermometerSnowflake, ThermometerSun,
+  Wind, WifiOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface SensorCardProps {
+interface Props {
   sensor: Sensor;
   onClick?: () => void;
+  onTogglePin?: () => void;
+  onToggleMute?: () => void;
 }
 
-const getStatus = (s: Sensor) => {
-  if (s.lastTemperature == null) return { kind: "offline" as const, label: "Brak odczytu" };
-  if (s.minTempAlert != null && s.lastTemperature < s.minTempAlert)
-    return { kind: "cold" as const, label: "Za zimno!" };
-  if (s.maxTempAlert != null && s.lastTemperature > s.maxTempAlert)
-    return { kind: "hot" as const, label: "Za ciepło!" };
-  if (s.lastTemperature < 10) return { kind: "cold" as const, label: "Chłodno" };
-  if (s.lastTemperature > 26) return { kind: "warm" as const, label: "Ciepło" };
-  return { kind: "ok" as const, label: "Komfortowo" };
+const ZONE_GRADIENT: Record<TempZone, string> = {
+  frozen:  "bg-gradient-frozen",
+  cold:    "bg-gradient-cold",
+  cool:    "bg-gradient-cool",
+  ok:      "bg-gradient-ok",
+  warm:    "bg-gradient-warm",
+  hot:     "bg-gradient-hot",
+  danger:  "bg-gradient-danger",
+  offline: "bg-gradient-offline",
 };
 
-const gradients = {
-  cold: "bg-gradient-cold",
-  ok: "bg-gradient-ok",
-  warm: "bg-gradient-warm",
-  hot: "bg-gradient-hot",
-  offline: "bg-muted/60",
+const PROFILE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  radio:                   Radio,
+  droplets:                Droplets,
+  "circle-dot":            CircleDot,
+  gauge:                   Gauge,
+  thermometer:             Thermometer,
+  "thermometer-snowflake": ThermometerSnowflake,
+  activity:                Activity,
+  leaf:                    Leaf,
+  wind:                    Wind,
 };
 
-const formatTime = (iso?: string) => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  const diff = Date.now() - d.getTime();
-  if (diff < 30_000) return "przed chwilą";
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s temu`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min temu`;
-  return d.toLocaleString("pl-PL", {
-    hour: "2-digit", minute: "2-digit",
-    day: "2-digit", month: "2-digit",
-  });
-};
-
-const BatteryIcon = ({ level }: { level?: number }) => {
+function BatteryIcon({ level }: { level?: number }) {
   if (level == null) return null;
-  if (level < 20) return <BatteryLow className="h-3.5 w-3.5 text-destructive" />;
-  if (level < 60) return <BatteryMedium className="h-3.5 w-3.5" />;
-  return <BatteryFull className="h-3.5 w-3.5" />;
-};
+  const cls = "h-3.5 w-3.5";
+  if (level < 20) return <BatteryLow  className={cn(cls, "text-red-300")} />;
+  if (level < 50) return <BatteryMedium className={cls} />;
+  return <BatteryFull className={cls} />;
+}
 
-const RssiIcon = ({ rssi }: { rssi?: number }) => {
+function RssiBars({ rssi }: { rssi?: number }) {
   if (rssi == null) return null;
-  return rssi > -70
-    ? <Wifi className="h-3.5 w-3.5" />
-    : <WifiOff className="h-3.5 w-3.5 opacity-70" />;
-};
+  const strength = rssi > -60 ? 3 : rssi > -75 ? 2 : 1;
+  return (
+    <span className="flex items-end gap-[2px] h-3.5">
+      {[1, 2, 3].map((b) => (
+        <span
+          key={b}
+          className={cn("w-[3px] rounded-sm transition-all", b <= strength ? "opacity-100" : "opacity-25")}
+          style={{ height: `${b * 4}px`, background: "currentColor" }}
+        />
+      ))}
+    </span>
+  );
+}
 
-export function SensorCard({ sensor, onClick }: SensorCardProps) {
-  const status = getStatus(sensor);
-  const isOffline = status.kind === "offline";
-  const settings = getSettings();
-  const isELA = sensor.source === "ela-advertisement";
+function formatRelTime(iso?: string): string {
+  if (!iso) return "—";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 30)    return "przed chwilą";
+  if (s < 60)    return `${Math.floor(s)}s temu`;
+  if (s < 3600)  return `${Math.floor(s / 60)} min temu`;
+  if (s < 86400) return new Date(iso).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleDateString("pl-PL", { day: "2-digit", month: "short" });
+}
+
+export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute }: Props) {
+  const settings    = getSettings();
+  const zone        = getTempZone(sensor.lastTemperature, sensor.minTempAlert, sensor.maxTempAlert);
+  const isOffline   = zone === "offline";
+  const profile     = getProfile(sensor.profileId);
+  const ProfileIcon = PROFILE_ICON[profile?.icon ?? "thermometer"] ?? Thermometer;
 
   return (
-    <button
-      onClick={onClick}
+    <div
       className={cn(
-        "group relative overflow-hidden rounded-3xl p-6 text-left shadow-card transition-all duration-300",
-        "hover:-translate-y-1 hover:shadow-glow border border-border/40",
-        gradients[status.kind],
-        !isOffline && "text-white",
-        !onClick && "cursor-default",
+        "group relative overflow-hidden rounded-3xl noise",
+        "transition-all duration-300 ease-out",
+        "hover:-translate-y-1.5 hover:shadow-glow cursor-pointer",
+        ZONE_GRADIENT[zone],
       )}
+      onClick={onClick}
     >
-      <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-white/10 blur-2xl" />
-      <div className="pointer-events-none absolute -bottom-8 -left-4 h-24 w-24 rounded-full bg-white/[0.08] blur-2xl" />
+      <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-12 left-0 h-32 w-32 rounded-full bg-white/[0.08] blur-2xl" />
 
-      <div className="relative flex items-start justify-between">
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium uppercase tracking-widest opacity-75">
-            {sensor.customName || (isELA ? "ELA Blue Puck T" : sensor.bluetoothName)}
-          </p>
-          <h3 className="mt-1 truncate text-2xl font-bold tracking-tight">{sensor.roomName}</h3>
+      {/* Quick actions */}
+      <div className="absolute right-3 top-3 z-10 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        {onTogglePin && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 text-white/80 backdrop-blur hover:bg-white/25 hover:text-white"
+          >
+            <Pin className={cn("h-3.5 w-3.5", sensor.isPinned && "fill-current")} />
+          </button>
+        )}
+        {onToggleMute && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleMute(); }}
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 text-white/80 backdrop-blur hover:bg-white/25 hover:text-white"
+          >
+            {sensor.alertMuted ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+          </button>
+        )}
+      </div>
+
+      <div className={cn("relative p-6 text-white", isOffline && "text-white/70")}>
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-semibold uppercase tracking-widest opacity-70">
+              {sensor.customName ?? profile?.name ?? "Czujnik"}
+            </p>
+            <h3 className="mt-1 truncate text-[1.65rem] font-bold leading-none tracking-tight">
+              {sensor.roomName}
+            </h3>
+          </div>
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/15 backdrop-blur">
+            <ProfileIcon className="h-5 w-5" />
+          </div>
         </div>
 
-        <div className={cn(
-          "ml-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-full backdrop-blur",
-          isOffline ? "bg-muted-foreground/15" : "bg-white/15"
-        )}>
-          {isELA ? (
-            <Radio className="h-5 w-5" />
-          ) : sensor.status === "connected" ? (
-            <Bluetooth className="h-5 w-5" />
+        {/* Temperatura */}
+        <div className="mt-6 flex items-end gap-0.5">
+          {isOffline ? (
+            <div className="flex items-center gap-2 opacity-60">
+              <WifiOff className="h-5 w-5" />
+              <span className="text-lg font-medium">Brak sygnału</span>
+            </div>
           ) : (
-            <BluetoothOff className="h-5 w-5" />
+            <>
+              <span className="font-display tabular transition-number text-[3.5rem] font-bold leading-none">
+                {sensor.lastTemperature != null
+                  ? formatTemp(sensor.lastTemperature, settings.tempUnit).replace(/°[CF]$/, "")
+                  : "—"}
+              </span>
+              <span className="mb-2 ml-0.5 text-2xl font-semibold opacity-75">
+                {sensor.lastTemperature != null ? `°${settings.tempUnit}` : ""}
+              </span>
+            </>
           )}
         </div>
-      </div>
 
-      <div className="relative mt-8 flex items-end gap-1">
-        {isOffline ? (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <AlertTriangle className="h-5 w-5" />
-            <span className="text-lg font-medium">Brak danych</span>
-          </div>
-        ) : (
-          <>
-            <span className="text-6xl font-bold leading-none tracking-tighter tabular-nums">
-              {sensor.lastTemperature != null
-                ? formatTemp(sensor.lastTemperature, settings.tempUnit).replace(/°[CF]$/, "")
-                : "—"}
+        {/* Badges */}
+        <div className="mt-5 flex flex-wrap gap-2 text-xs">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1.5 font-semibold backdrop-blur-sm">
+            {zone === "cold" || zone === "frozen"
+              ? <ThermometerSnowflake className="h-3.5 w-3.5" />
+              : zone === "hot" || zone === "danger"
+              ? <ThermometerSun className="h-3.5 w-3.5" />
+              : <Thermometer className="h-3.5 w-3.5" />}
+            {ZONE_LABELS[zone]}
+          </span>
+
+          {sensor.lastHumidity != null && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1.5 backdrop-blur-sm">
+              <Droplets className="h-3.5 w-3.5" />
+              {formatHumidity(sensor.lastHumidity)}
             </span>
-            <span className="mb-1.5 text-2xl font-semibold opacity-80">
-              °{settings.tempUnit}
+          )}
+
+          {sensor.lastPressure != null && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1.5 backdrop-blur-sm">
+              <Gauge className="h-3.5 w-3.5" />
+              {formatPressure(sensor.lastPressure)}
             </span>
-          </>
-        )}
-      </div>
+          )}
+        </div>
 
-      <div className="relative mt-5 flex flex-wrap items-center gap-2 text-sm">
-        <span className={cn(
-          "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium backdrop-blur",
-          isOffline ? "bg-muted-foreground/10 text-muted-foreground" : "bg-white/20"
-        )}>
-          {status.kind === "cold" || status.kind === "offline"
-            ? <ThermometerSnowflake className="h-3.5 w-3.5" />
-            : <ThermometerSun className="h-3.5 w-3.5" />}
-          {status.label}
-        </span>
-
-        {sensor.lastHumidity != null && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-3 py-1 text-xs font-medium backdrop-blur">
-            <Droplets className="h-3.5 w-3.5" />
-            {sensor.lastHumidity.toFixed(0)}%
+        {/* Footer */}
+        <div className="mt-5 flex items-center justify-between text-xs opacity-60">
+          <span className="flex items-center gap-2">
+            {sensor.batteryLevel != null && (
+              <span className={cn("flex items-center gap-1", sensor.batteryLevel < 20 && "text-red-200 font-semibold opacity-100")}>
+                <BatteryIcon level={sensor.batteryLevel} />
+                {sensor.batteryLevel}%
+              </span>
+            )}
+            {sensor.lastRssi != null && (
+              <span className="flex items-center gap-1">
+                <RssiBars rssi={sensor.lastRssi} />
+                {sensor.lastRssi} dBm
+              </span>
+            )}
           </span>
-        )}
-
-        {sensor.batteryLevel != null && (
-          <span className={cn(
-            "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs backdrop-blur",
-            sensor.batteryLevel < 20 ? "bg-destructive/30 font-semibold" : "bg-white/15"
-          )}>
-            <BatteryIcon level={sensor.batteryLevel} />
-            {sensor.batteryLevel}%
+          <span className="flex items-center gap-1.5">
+            {!isOffline && (
+              <span className="pulse-dot" />
+            )}
+            {formatRelTime(sensor.lastReadAt)}
           </span>
-        )}
+        </div>
 
-        {sensor.lastRssi != null && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-1 text-xs backdrop-blur">
-            <RssiIcon rssi={sensor.lastRssi} />
-            {sensor.lastRssi} dBm
-          </span>
-        )}
-      </div>
-
-      <div className={cn(
-        "relative mt-4 text-xs",
-        isOffline ? "text-muted-foreground" : "opacity-60"
-      )}>
-        Odczyt: {formatTime(sensor.lastReadAt)}
         {sensor.isDemo && (
-          <span className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-xs font-medium">DEMO</span>
+          <span className="absolute bottom-3 left-3 rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
+            demo
+          </span>
+        )}
+
+        {sensor.isPinned && (
+          <span className="absolute top-3 left-3">
+            <Pin className="h-3.5 w-3.5 fill-white/60 text-white/60" />
+          </span>
         )}
       </div>
-    </button>
+    </div>
   );
 }

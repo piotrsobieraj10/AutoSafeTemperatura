@@ -1,22 +1,26 @@
+// SensorsPage.tsx v2
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button }   from "@/components/ui/button";
+import { Input }    from "@/components/ui/input";
+import { Label }    from "@/components/ui/label";
+import { Badge }    from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Bluetooth, BluetoothOff, Plus, RefreshCw, Trash2,
-  Radio, BatteryLow, BatteryMedium, BatteryFull, Wifi, WifiOff,
+  Activity, BatteryFull, BatteryLow, BatteryMedium,
+  Bluetooth, BluetoothOff, Droplets, Gauge,
+  Plus, Radio, RefreshCw, Trash2, Wifi, WifiOff,
 } from "lucide-react";
-import { useSensors } from "@/hooks/useSensors";
-import { AddSensorModal } from "@/components/AddSensorModal";
-import { reconnectELASensor, reconnectSensor } from "@/services/bluetoothService";
-import { formatTemp, getSettings } from "@/services/storageService";
-import { sensorProfiles } from "@/services/sensorProfiles";
-import { toast } from "sonner";
+import { useSensors }       from "@/hooks/useSensors";
+import { AddSensorModal }   from "@/components/AddSensorModal";
+import {
+  clearMeasurements, formatHumidity, formatPressure,
+  formatTemp, getSettings,
+} from "@/services/storageService";
+import { getCachedDevice, reconnectSensor } from "@/services/bluetoothService";
+import { getProfile } from "@/services/sensorProfiles";
+import { toast }      from "sonner";
 import type { Sensor } from "@/types/sensor";
-import { formatReadingTime } from "@/config/app";
+import { cn } from "@/lib/utils";
 
 export function SensorsPage() {
   const { sensors, upsert, remove, refresh } = useSensors();
@@ -24,50 +28,36 @@ export function SensorsPage() {
   const settings = getSettings();
 
   const handleReconnect = async (s: Sensor) => {
-    if (s.isDemo) {
-      toast.info("To czujnik demo — zawsze połączony.");
-      return;
-    }
-
-    if (s.source === "ela-advertisement") {
-      const ok = await reconnectELASensor(s, {
-        onDeviceFound: (_device, data) => {
-          upsert({
-            ...s,
-            lastTemperature: data.temperature ?? s.lastTemperature,
-            batteryLevel: data.battery ?? s.batteryLevel,
-            lastRssi: data.rssi,
-            lastReadAt: new Date().toISOString(),
-            status: "connected",
-          });
-          toast.success("ELA Advertisement wznowiony.");
-        },
-        onError: (e) => {
-          toast.error(`Błąd: ${e.message}`);
-          upsert({ ...s, status: "error" });
-        },
-      });
-      if (!ok) toast.warning("Urządzenie nie w cache — dodaj czujnik ponownie.");
-      return;
-    }
-
-    try {
-      await reconnectSensor(s);
-      upsert({ ...s, status: "connected" });
-      toast.success("Połączono ponownie.");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Nie udało się połączyć.");
-      upsert({ ...s, status: "error" });
-    }
+    if (s.isDemo) { toast.info("Czujnik demo jest zawsze połączony."); return; }
+    const device = getCachedDevice(s.deviceId);
+    if (!device) { toast.warning("Urządzenie nie w pamięci — dodaj czujnik ponownie."); return; }
+    const ok = await reconnectSensor(
+      s,
+      ({ data }) => {
+        upsert({
+          ...s,
+          lastTemperature: data.temperature ?? s.lastTemperature,
+          lastHumidity:    data.humidity    ?? s.lastHumidity,
+          status:          "connected",
+          lastReadAt:      new Date().toISOString(),
+        });
+        toast.success("Połączono ponownie.");
+      },
+      (e) => {
+        toast.error(e.message);
+        upsert({ ...s, status: "error" });
+      }
+    );
+    if (!ok) toast.error("Nie udało się połączyć.");
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-3xl font-bold">Czujniki</h1>
           <p className="text-sm text-muted-foreground">
-            Wszystkie urządzenia BLE podpięte do aplikacji.
+            {sensors.length} urządzeń · {sensors.filter((s) => s.status === "connected").length} online
           </p>
         </div>
         <Button onClick={() => setAddOpen(true)}>
@@ -78,151 +68,121 @@ export function SensorsPage() {
       {sensors.length === 0 && (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            Brak czujników. Kliknij „Dodaj" aby sparować Blue Puck T.
+            Brak czujników. Kliknij „Dodaj".
           </CardContent>
         </Card>
       )}
 
       <div className="grid gap-4">
         {sensors.map((s) => {
-          const isELA = s.source === "ela-advertisement";
+          const profile = getProfile(s.profileId);
+          const isAdv   = profile?.source === "advertisement";
+
           return (
-            <Card key={s.id} className="overflow-hidden">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="flex flex-wrap items-center gap-2">
-                  {isELA ? (
-                    <Radio className="h-4 w-4 shrink-0 text-primary" />
-                  ) : s.status === "connected" ? (
-                    <Bluetooth className="h-4 w-4 shrink-0 text-ok" />
-                  ) : (
-                    <BluetoothOff className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <Card
+              key={s.id}
+              className={cn("overflow-hidden transition-all", s.status === "error" && "border-destructive/40")}
+            >
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                  {isAdv
+                    ? <Radio className="h-4 w-4 shrink-0 text-primary" />
+                    : s.status === "connected"
+                    ? <Bluetooth className="h-4 w-4 shrink-0 text-green-500" />
+                    : <BluetoothOff className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                  <span className="font-bold">{s.roomName}</span>
+                  {s.customName && (
+                    <span className="text-sm font-normal text-muted-foreground">· {s.customName}</span>
                   )}
-                  <span>{s.roomName}</span>
-                  {isELA && <Badge variant="secondary" className="text-xs">ELA Advertisement</Badge>}
-                  {s.isDemo && <Badge className="bg-primary/15 text-xs text-primary">DEMO</Badge>}
                   <Badge
-                    variant={s.status === "connected" ? "default" : "outline"}
+                    variant={s.status === "connected" ? "default" : s.status === "error" ? "destructive" : "secondary"}
                     className="text-xs"
                   >
-                    {s.status === "connected" ? "Online"
-                      : s.status === "error" ? "Błąd"
-                      : s.status === "scanning" ? "Skanuje…"
-                      : "Offline"}
+                    {s.status === "connected" ? "Online" : s.status === "error" ? "Błąd" : "Offline"}
                   </Badge>
+                  {profile && (
+                    <Badge variant="outline" className="text-xs">{profile.name}</Badge>
+                  )}
+                  {s.isDemo && (
+                    <Badge className="border-primary/30 bg-primary/15 text-xs text-primary">DEMO</Badge>
+                  )}
                 </CardTitle>
-
                 <div className="flex gap-1">
-                  <Button size="icon" variant="ghost" onClick={() => handleReconnect(s)} title="Wznów połączenie">
+                  <Button size="icon" variant="ghost" title="Wznów połączenie"
+                    onClick={() => handleReconnect(s)}>
                     <RefreshCw className="h-4 w-4" />
                   </Button>
-                  <Button size="icon" variant="ghost" onClick={() => { remove(s.id); toast.success("Usunięto czujnik."); }} title="Usuń czujnik">
+                  <Button size="icon" variant="ghost" title="Wyczyść historię pomiarów"
+                    onClick={() => { clearMeasurements(s.id); toast.success("Historia wyczyszczona."); }}>
+                    <Activity className="h-4 w-4" />
+                  </Button>
+                  <Button size="icon" variant="ghost" title="Usuń czujnik"
+                    onClick={() => { remove(s.id); toast.success("Usunięto czujnik."); }}>
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
                 </div>
               </CardHeader>
 
               <CardContent className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Nazwa BLE</Label>
-                    <div className="truncate text-sm font-medium">{s.bluetoothName}</div>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Device ID</Label>
-                    <div className="truncate font-mono text-xs">{s.deviceId}</div>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Ostatni odczyt</Label>
-                    <div className="text-sm font-semibold">
-                      {formatTemp(s.lastTemperature, settings.tempUnit)}
-                      <span className="block text-xs font-normal text-muted-foreground">
-                        {formatReadingTime(s.lastReadAt)}
-                      </span>
-                    </div>
-                  </div>
+                <div className="grid gap-2 sm:grid-cols-4">
+                  <ReadingCell label="Temperatura" value={formatTemp(s.lastTemperature, settings.tempUnit)}
+                    icon={<Activity className="h-3.5 w-3.5" />} />
+                  {profile?.supportsHumidity && (
+                    <ReadingCell label="Wilgotność" value={formatHumidity(s.lastHumidity)}
+                      icon={<Droplets className="h-3.5 w-3.5" />} />
+                  )}
+                  {profile?.supportsPressure && (
+                    <ReadingCell label="Ciśnienie" value={formatPressure(s.lastPressure)}
+                      icon={<Gauge className="h-3.5 w-3.5" />} />
+                  )}
+                  {profile?.supportsBattery && s.batteryLevel != null && (
+                    <ReadingCell
+                      label="Bateria"
+                      icon={
+                        s.batteryLevel < 20
+                          ? <BatteryLow className="h-3.5 w-3.5 text-destructive" />
+                          : s.batteryLevel < 60
+                          ? <BatteryMedium className="h-3.5 w-3.5" />
+                          : <BatteryFull className="h-3.5 w-3.5" />
+                      }
+                      value={`${s.batteryLevel}%`}
+                      warn={s.batteryLevel < 20}
+                    />
+                  )}
                 </div>
 
-                {isELA && (
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Bateria</Label>
-                      <div className="flex items-center gap-1.5 text-sm">
-                        {s.batteryLevel != null ? (
-                          <>
-                            {s.batteryLevel < 20
-                              ? <BatteryLow className="h-4 w-4 text-destructive" />
-                              : s.batteryLevel < 60
-                              ? <BatteryMedium className="h-4 w-4" />
-                              : <BatteryFull className="h-4 w-4 text-ok" />}
-                            <span className={s.batteryLevel < 20 ? "font-semibold text-destructive" : ""}>
-                              {s.batteryLevel}%
-                            </span>
-                          </>
-                        ) : "—"}
-                      </div>
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Sygnał RSSI</Label>
-                      <div className="flex items-center gap-1.5 text-sm">
-                        {s.lastRssi != null ? (
-                          <>
-                            {s.lastRssi > -70
-                              ? <Wifi className="h-4 w-4 text-ok" />
-                              : <WifiOff className="h-4 w-4 text-muted-foreground" />}
-                            {s.lastRssi} dBm
-                          </>
-                        ) : "—"}
-                      </div>
-                    </div>
-                    {s.macAddress && (
-                      <div>
-                        <Label className="text-xs text-muted-foreground">MAC</Label>
-                        <div className="font-mono text-xs">{s.macAddress}</div>
-                      </div>
-                    )}
+                {s.lastRssi != null && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    {s.lastRssi > -70
+                      ? <Wifi className="h-3.5 w-3.5" />
+                      : <WifiOff className="h-3.5 w-3.5" />}
+                    RSSI: {s.lastRssi} dBm ·{" "}
+                    {s.lastRssi > -60 ? "Doskonały" : s.lastRssi > -75 ? "Dobry" : "Słaby"} sygnał
+                    {s.macAddress && <span className="ml-2 font-mono">{s.macAddress}</span>}
                   </div>
                 )}
 
                 <div className="grid gap-3 sm:grid-cols-3">
-                  <div>
-                    <Label className="text-xs">Pomieszczenie</Label>
-                    <Input value={s.roomName} onChange={(e) => upsert({ ...s, roomName: e.target.value })} />
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Nazwa pomieszczenia</Label>
+                    <Input value={s.roomName}
+                      onChange={(e) => upsert({ ...s, roomName: e.target.value })} />
                   </div>
-                  <div>
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Min °{settings.tempUnit} (alert)</Label>
-                    <Input
-                      type="number"
-                      value={s.minTempAlert ?? ""}
-                      onChange={(e) => upsert({ ...s, minTempAlert: e.target.value === "" ? undefined : +e.target.value })}
-                    />
+                    <Input type="number" value={s.minTempAlert ?? ""}
+                      onChange={(e) =>
+                        upsert({ ...s, minTempAlert: e.target.value === "" ? undefined : +e.target.value })
+                      } />
                   </div>
-                  <div>
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Max °{settings.tempUnit} (alert)</Label>
-                    <Input
-                      type="number"
-                      value={s.maxTempAlert ?? ""}
-                      onChange={(e) => upsert({ ...s, maxTempAlert: e.target.value === "" ? undefined : +e.target.value })}
-                    />
+                    <Input type="number" value={s.maxTempAlert ?? ""}
+                      onChange={(e) =>
+                        upsert({ ...s, maxTempAlert: e.target.value === "" ? undefined : +e.target.value })
+                      } />
                   </div>
                 </div>
-
-                {!isELA && (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <Label className="text-xs">Profil czujnika</Label>
-                      <Select value={s.profileId ?? ""} onValueChange={(profileId) => upsert({ ...s, profileId })}>
-                        <SelectTrigger><SelectValue placeholder="Wybierz profil" /></SelectTrigger>
-                        <SelectContent>
-                          {sensorProfiles.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Opis</Label>
-                      <Input value={s.customName ?? ""} onChange={(e) => upsert({ ...s, customName: e.target.value || undefined })} placeholder="np. przy piecu" />
-                    </div>
-                  </div>
-                )}
               </CardContent>
             </Card>
           );
@@ -230,6 +190,24 @@ export function SensorsPage() {
       </div>
 
       <AddSensorModal open={addOpen} onOpenChange={setAddOpen} onAdded={refresh} />
+    </div>
+  );
+}
+
+function ReadingCell({
+  label, value, icon, warn,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+  warn?: boolean;
+}) {
+  return (
+    <div className="rounded-xl bg-muted/50 px-3 py-2.5">
+      <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+        {icon} {label}
+      </div>
+      <div className={cn("font-display text-base font-bold", warn && "text-destructive")}>{value}</div>
     </div>
   );
 }

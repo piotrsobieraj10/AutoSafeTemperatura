@@ -1,86 +1,77 @@
+// HistoryPage.tsx v2
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Download, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { TemperatureChart } from "@/components/TemperatureChart";
 import { useSensors } from "@/hooks/useSensors";
-import { buildMeasurementsCsv, clearMeasurements, getMeasurements } from "@/services/storageService";
-import { toast } from "sonner";
+import { formatHumidity, formatTemp, getMeasurementsForSensor, getSettings } from "@/services/storageService";
+import { Thermometer } from "lucide-react";
 
 type Range = "1h" | "24h" | "7d";
-
-const downloadTextFile = (filename: string, content: string, type: string) => {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-};
+const RANGES: Record<Range, number> = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604_800_000 };
 
 export function HistoryPage() {
-  const { sensors, refresh } = useSensors();
-  const [range, setRange] = useState<Range>("1h");
-  const totalMeasurements = getMeasurements().length;
-
-  const handleExportCsv = () => {
-    downloadTextFile("autosafe-temperatura-pomiary.csv", buildMeasurementsCsv(), "text/csv;charset=utf-8");
-    toast.success("Wyeksportowano historię CSV.");
-  };
-
-  const handleClear = () => {
-    clearMeasurements();
-    refresh();
-    toast.success("Wyczyszczono historię pomiarów.");
-  };
+  const { sensors } = useSensors();
+  const settings    = getSettings();
+  const [range, setRange] = useState<Range>((settings.chartDefaultRange as Range) ?? "24h");
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-display text-3xl font-bold">Historia pomiarów</h1>
-          <p className="text-sm text-muted-foreground">Lokalna historia z eksportem CSV. Liczba zapisanych pomiarów: {totalMeasurements}.</p>
+          <h1 className="font-display text-3xl font-bold">Historia</h1>
+          <p className="text-sm text-muted-foreground">Lokalne pomiary z czujników BLE.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Tabs value={range} onValueChange={(v) => setRange(v as Range)}>
-            <TabsList>
-              <TabsTrigger value="1h">1h</TabsTrigger>
-              <TabsTrigger value="24h">24h</TabsTrigger>
-              <TabsTrigger value="7d">7 dni</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <Button variant="outline" onClick={handleExportCsv} disabled={totalMeasurements === 0}>
-            <Download className="mr-2 h-4 w-4" /> CSV
-          </Button>
-          <Button variant="ghost" onClick={handleClear} disabled={totalMeasurements === 0}>
-            <Trash2 className="mr-2 h-4 w-4" /> Wyczyść
-          </Button>
-        </div>
+        <Tabs value={range} onValueChange={(v) => setRange(v as Range)}>
+          <TabsList className="rounded-full">
+            <TabsTrigger value="1h"  className="rounded-full">1h</TabsTrigger>
+            <TabsTrigger value="24h" className="rounded-full">24h</TabsTrigger>
+            <TabsTrigger value="7d"  className="rounded-full">7 dni</TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       {sensors.length === 0 && (
-        <Card><CardContent className="py-12 text-center text-muted-foreground">Brak danych.</CardContent></Card>
+        <Card>
+          <CardContent className="py-16 text-center text-muted-foreground">
+            <Thermometer className="mx-auto mb-3 h-10 w-10 opacity-30" />
+            Brak czujników — dodaj je w zakładce Czujniki.
+          </CardContent>
+        </Card>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {sensors.map((s) => (
-          <Card key={s.id}>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between gap-3">
-                <span className="truncate">{s.roomName}</span>
-                <span className="text-sm font-normal text-muted-foreground">
-                  {s.lastTemperature != null ? `${s.lastTemperature.toFixed(1)}°C` : "—"}
-                  {s.lastHumidity != null ? ` · ${s.lastHumidity.toFixed(0)}%` : ""}
-                </span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <TemperatureChart sensorId={s.id} range={range} refreshKey={s.lastReadAt} />
-            </CardContent>
-          </Card>
-        ))}
+      <div className="grid gap-5 lg:grid-cols-2">
+        {sensors.map((s) => {
+          const ms = getMeasurementsForSensor(s.id, RANGES[range]);
+          return (
+            <Card key={s.id} className="overflow-hidden">
+              <CardHeader className="pb-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="font-display text-lg">{s.roomName}</CardTitle>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {ms.length} pomiarów w zakresie
+                    </p>
+                  </div>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span className="font-display text-xl font-bold">
+                      {formatTemp(s.lastTemperature, settings.tempUnit)}
+                    </span>
+                    {s.lastHumidity != null && (
+                      <Badge variant="secondary" className="text-xs">
+                        {formatHumidity(s.lastHumidity)}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <TemperatureChart sensorId={s.id} range={range} refreshKey={range} />
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
