@@ -1,4 +1,7 @@
-// types/sensor.ts v2
+// ============================================================
+// types/sensor.ts v2 — rozszerzone typy dla wszystkich czujników
+// ============================================================
+
 export type SensorStatus = "connected" | "disconnected" | "scanning" | "error" | "unknown";
 export type SensorSource = "ela-advertisement" | "gatt" | "ruuvi" | "govee" | "inkbird" | "demo";
 export type TempZone = "frozen" | "cold" | "cool" | "ok" | "warm" | "hot" | "danger" | "offline";
@@ -11,19 +14,22 @@ export interface Sensor {
   roomName: string;
   customName?: string;
   profileId: string;
-  lastTemperature?: number;
+  lastTemperature?: number;   // zawsze °C wewnętrznie
   lastHumidity?: number;
-  lastPressure?: number;
+  lastPressure?: number;      // hPa — RuuviTag
   lastReadAt?: string;
   status: SensorStatus;
   source: SensorSource;
+  // Alerty
   minTempAlert?: number;
   maxTempAlert?: number;
   minHumidityAlert?: number;
   maxHumidityAlert?: number;
+  // Meta
   lastRssi?: number;
   batteryLevel?: number;
-  batteryVoltage?: number;
+  batteryVoltage?: number;    // mV — RuuviTag
+  // Flagi
   isDemo?: boolean;
   isPinned?: boolean;
   alertMuted?: boolean;
@@ -33,9 +39,9 @@ export interface Measurement {
   id: string;
   sensorId: string;
   roomName: string;
-  temperature: number;
+  temperature: number;        // °C
   humidity?: number;
-  pressure?: number;
+  pressure?: number;          // hPa
   rssi?: number;
   batteryLevel?: number;
   createdAt: string;
@@ -46,7 +52,7 @@ export interface SensorProfile {
   name: string;
   manufacturer?: string;
   model?: string;
-  icon?: string;
+  icon?: string;              // emoji lub nazwa ikony lucide
   serviceUuid?: string;
   characteristicUuid?: string;
   manufacturerId?: number;
@@ -56,7 +62,7 @@ export interface SensorProfile {
   supportsBattery: boolean;
   supportsRssi: boolean;
   source: "gatt" | "advertisement";
-  tempRange?: [number, number];
+  tempRange?: [number, number]; // [min, max] °C
   description?: string;
   setupUrl?: string;
   decodeGatt?: (data: DataView) => DecodedData;
@@ -95,6 +101,7 @@ export interface AlertEvent {
   acknowledged: boolean;
 }
 
+// Pomocnicze
 export const getTempZone = (temp?: number, min?: number, max?: number): TempZone => {
   if (temp == null) return "offline";
   if (min != null && temp < min) return temp < min - 5 ? "frozen" : "cold";

@@ -1,45 +1,49 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+@source "../src";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
+/* ── Google Fonts ─────────────────────────────────────────── */
+/* Loaded via __root.tsx head links */
+
 @theme inline {
-  --radius-sm:   calc(var(--radius) - 4px);
-  --radius-md:   calc(var(--radius) - 2px);
-  --radius-lg:   var(--radius);
-  --radius-xl:   calc(var(--radius) + 4px);
-  --radius-2xl:  calc(var(--radius) + 8px);
-  --radius-3xl:  calc(var(--radius) + 16px);
+  --radius-sm:  calc(var(--radius) - 4px);
+  --radius-md:  calc(var(--radius) - 2px);
+  --radius-lg:  var(--radius);
+  --radius-xl:  calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 16px);
   --radius-full: 9999px;
 
-  --color-background:           var(--background);
-  --color-foreground:           var(--foreground);
-  --color-card:                 var(--card);
-  --color-card-foreground:      var(--card-foreground);
-  --color-popover:              var(--popover);
-  --color-popover-foreground:   var(--popover-foreground);
-  --color-primary:              var(--primary);
-  --color-primary-foreground:   var(--primary-foreground);
-  --color-secondary:            var(--secondary);
+  --color-background:         var(--background);
+  --color-foreground:         var(--foreground);
+  --color-card:               var(--card);
+  --color-card-foreground:    var(--card-foreground);
+  --color-popover:            var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary:            var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary:          var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted:                var(--muted);
-  --color-muted-foreground:     var(--muted-foreground);
-  --color-accent:               var(--accent);
-  --color-accent-foreground:    var(--accent-foreground);
-  --color-destructive:          var(--destructive);
+  --color-muted:              var(--muted);
+  --color-muted-foreground:   var(--muted-foreground);
+  --color-accent:             var(--accent);
+  --color-accent-foreground:  var(--accent-foreground);
+  --color-destructive:        var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
-  --color-border:               var(--border);
-  --color-input:                var(--input);
-  --color-ring:                 var(--ring);
-  --color-surface:              var(--surface);
+  --color-border:             var(--border);
+  --color-input:              var(--input);
+  --color-ring:               var(--ring);
+  --color-surface:            var(--surface);
 
-  --color-temp-frozen: var(--temp-frozen);
-  --color-temp-cold:   var(--temp-cold);
-  --color-temp-cool:   var(--temp-cool);
-  --color-temp-ok:     var(--temp-ok);
-  --color-temp-warm:   var(--temp-warm);
-  --color-temp-hot:    var(--temp-hot);
-  --color-temp-danger: var(--temp-danger);
+  --color-temp-frozen:  var(--temp-frozen);
+  --color-temp-cold:    var(--temp-cold);
+  --color-temp-cool:    var(--temp-cool);
+  --color-temp-ok:      var(--temp-ok);
+  --color-temp-warm:    var(--temp-warm);
+  --color-temp-hot:     var(--temp-hot);
+  --color-temp-danger:  var(--temp-danger);
 
   --font-display: "Plus Jakarta Sans", "Sora", system-ui, sans-serif;
   --font-body:    "DM Sans", "Inter", system-ui, sans-serif;
@@ -82,6 +86,7 @@
   --input:             oklch(0.91 0.012 255);
   --ring:              oklch(0.55 0.22 265);
 
+  /* Temperature semantic colours */
   --temp-frozen:  oklch(0.65 0.18 225);
   --temp-cold:    oklch(0.60 0.17 240);
   --temp-cool:    oklch(0.62 0.14 220);
@@ -90,16 +95,18 @@
   --temp-hot:     oklch(0.66 0.22 38);
   --temp-danger:  oklch(0.58 0.25 25);
 
-  --gradient-hero:    linear-gradient(135deg, oklch(0.52 0.22 265) 0%, oklch(0.60 0.20 230) 50%, oklch(0.56 0.18 290) 100%);
-  --gradient-frozen:  linear-gradient(145deg, oklch(0.68 0.16 220) 0%, oklch(0.58 0.20 245) 100%);
-  --gradient-cold:    linear-gradient(145deg, oklch(0.62 0.17 240) 0%, oklch(0.54 0.20 260) 100%);
-  --gradient-cool:    linear-gradient(145deg, oklch(0.65 0.14 220) 0%, oklch(0.58 0.16 200) 100%);
-  --gradient-ok:      linear-gradient(145deg, oklch(0.66 0.18 165) 0%, oklch(0.60 0.16 190) 100%);
-  --gradient-warm:    linear-gradient(145deg, oklch(0.75 0.18 80)  0%, oklch(0.68 0.20 55)  100%);
-  --gradient-hot:     linear-gradient(145deg, oklch(0.68 0.22 38)  0%, oklch(0.58 0.24 20)  100%);
-  --gradient-danger:  linear-gradient(145deg, oklch(0.60 0.25 25)  0%, oklch(0.50 0.26 12)  100%);
-  --gradient-offline: linear-gradient(145deg, oklch(0.75 0.01 260) 0%, oklch(0.65 0.02 260) 100%);
+  /* Gradients */
+  --gradient-hero:   linear-gradient(135deg, oklch(0.52 0.22 265) 0%, oklch(0.60 0.20 230) 50%, oklch(0.56 0.18 290) 100%);
+  --gradient-frozen: linear-gradient(145deg, oklch(0.68 0.16 220) 0%, oklch(0.58 0.20 245) 100%);
+  --gradient-cold:   linear-gradient(145deg, oklch(0.62 0.17 240) 0%, oklch(0.54 0.20 260) 100%);
+  --gradient-cool:   linear-gradient(145deg, oklch(0.65 0.14 220) 0%, oklch(0.58 0.16 200) 100%);
+  --gradient-ok:     linear-gradient(145deg, oklch(0.66 0.18 165) 0%, oklch(0.60 0.16 190) 100%);
+  --gradient-warm:   linear-gradient(145deg, oklch(0.75 0.18 80)  0%, oklch(0.68 0.20 55)  100%);
+  --gradient-hot:    linear-gradient(145deg, oklch(0.68 0.22 38)  0%, oklch(0.58 0.24 20)  100%);
+  --gradient-danger: linear-gradient(145deg, oklch(0.60 0.25 25)  0%, oklch(0.50 0.26 12)  100%);
+  --gradient-offline:linear-gradient(145deg, oklch(0.75 0.01 260) 0%, oklch(0.65 0.02 260) 100%);
 
+  /* Shadows */
   --shadow-xs:   0 1px 3px oklch(0.2 0.04 265 / 0.08);
   --shadow-sm:   0 2px 8px -2px oklch(0.2 0.04 265 / 0.10);
   --shadow-md:   0 4px 20px -4px oklch(0.2 0.04 265 / 0.12);
@@ -109,7 +116,7 @@
 }
 
 /* ══════════════════════════════════════════════════════════ */
-/*  DARK MODE                                                 */
+/*  DARK MODE  (default — jakościowe dark-first)             */
 /* ══════════════════════════════════════════════════════════ */
 .dark {
   --background:        oklch(0.118 0.022 265);
@@ -142,6 +149,7 @@
   --input:             oklch(0.22 0.030 265);
   --ring:              oklch(0.70 0.20 265);
 
+  /* Temperature */
   --temp-frozen:  oklch(0.72 0.18 225);
   --temp-cold:    oklch(0.68 0.17 240);
   --temp-cool:    oklch(0.66 0.14 220);
@@ -150,16 +158,18 @@
   --temp-hot:     oklch(0.72 0.22 38);
   --temp-danger:  oklch(0.65 0.25 25);
 
-  --gradient-hero:    linear-gradient(135deg, oklch(0.42 0.22 265) 0%, oklch(0.36 0.18 240) 50%, oklch(0.38 0.16 290) 100%);
-  --gradient-frozen:  linear-gradient(145deg, oklch(0.38 0.18 220) 0%, oklch(0.30 0.22 245) 100%);
-  --gradient-cold:    linear-gradient(145deg, oklch(0.32 0.19 240) 0%, oklch(0.26 0.22 260) 100%);
-  --gradient-cool:    linear-gradient(145deg, oklch(0.34 0.15 220) 0%, oklch(0.28 0.18 205) 100%);
-  --gradient-ok:      linear-gradient(145deg, oklch(0.34 0.18 165) 0%, oklch(0.28 0.16 190) 100%);
-  --gradient-warm:    linear-gradient(145deg, oklch(0.40 0.20 75)  0%, oklch(0.34 0.22 50)  100%);
-  --gradient-hot:     linear-gradient(145deg, oklch(0.36 0.24 35)  0%, oklch(0.28 0.26 18)  100%);
-  --gradient-danger:  linear-gradient(145deg, oklch(0.32 0.26 22)  0%, oklch(0.24 0.26 10)  100%);
-  --gradient-offline: linear-gradient(145deg, oklch(0.22 0.02 260) 0%, oklch(0.18 0.02 260) 100%);
+  /* Gradients dark */
+  --gradient-hero:   linear-gradient(135deg, oklch(0.42 0.22 265) 0%, oklch(0.36 0.18 240) 50%, oklch(0.38 0.16 290) 100%);
+  --gradient-frozen: linear-gradient(145deg, oklch(0.38 0.18 220) 0%, oklch(0.30 0.22 245) 100%);
+  --gradient-cold:   linear-gradient(145deg, oklch(0.32 0.19 240) 0%, oklch(0.26 0.22 260) 100%);
+  --gradient-cool:   linear-gradient(145deg, oklch(0.34 0.15 220) 0%, oklch(0.28 0.18 205) 100%);
+  --gradient-ok:     linear-gradient(145deg, oklch(0.34 0.18 165) 0%, oklch(0.28 0.16 190) 100%);
+  --gradient-warm:   linear-gradient(145deg, oklch(0.40 0.20 75)  0%, oklch(0.34 0.22 50)  100%);
+  --gradient-hot:    linear-gradient(145deg, oklch(0.36 0.24 35)  0%, oklch(0.28 0.26 18)  100%);
+  --gradient-danger: linear-gradient(145deg, oklch(0.32 0.26 22)  0%, oklch(0.24 0.26 10)  100%);
+  --gradient-offline:linear-gradient(145deg, oklch(0.22 0.02 260) 0%, oklch(0.18 0.02 260) 100%);
 
+  /* Shadows dark */
   --shadow-xs:   0 1px 3px oklch(0 0 0 / 0.25);
   --shadow-sm:   0 2px 8px -2px oklch(0 0 0 / 0.35);
   --shadow-md:   0 4px 20px -4px oklch(0 0 0 / 0.45);
@@ -199,6 +209,7 @@
     background: oklch(0.70 0.20 265 / 0.25);
   }
 
+  /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
@@ -209,6 +220,7 @@
     background: oklch(0.60 0.04 265 / 0.65);
   }
 
+  /* Focus visible */
   :focus-visible {
     outline: 2px solid var(--color-ring);
     outline-offset: 2px;
@@ -220,6 +232,7 @@
 /*  UTILITY CLASSES                                           */
 /* ══════════════════════════════════════════════════════════ */
 @layer utilities {
+  /* Gradients */
   .bg-gradient-hero    { background-image: var(--gradient-hero); }
   .bg-gradient-frozen  { background-image: var(--gradient-frozen); }
   .bg-gradient-cold    { background-image: var(--gradient-cold); }
@@ -230,6 +243,7 @@
   .bg-gradient-danger  { background-image: var(--gradient-danger); }
   .bg-gradient-offline { background-image: var(--gradient-offline); }
 
+  /* Shadows */
   .shadow-xs   { box-shadow: var(--shadow-xs); }
   .shadow-sm   { box-shadow: var(--shadow-sm); }
   .shadow-md   { box-shadow: var(--shadow-md); }
@@ -237,6 +251,7 @@
   .shadow-glow { box-shadow: var(--shadow-glow); }
   .shadow-card { box-shadow: var(--shadow-card); }
 
+  /* Glass morphism */
   .glass {
     background: oklch(1 0 0 / 0.06);
     backdrop-filter: blur(12px) saturate(160%);
@@ -248,6 +263,7 @@
     border-color: oklch(1 0 0 / 0.08);
   }
 
+  /* Noise texture overlay */
   .noise::after {
     content: "";
     position: absolute;
@@ -258,6 +274,7 @@
     mix-blend-mode: overlay;
   }
 
+  /* Temperature badge colours */
   .text-temp-frozen { color: var(--temp-frozen); }
   .text-temp-cold   { color: var(--temp-cold); }
   .text-temp-cool   { color: var(--temp-cool); }
@@ -266,12 +283,15 @@
   .text-temp-hot    { color: var(--temp-hot); }
   .text-temp-danger { color: var(--temp-danger); }
 
+  /* Tabular number rendering */
   .tabular { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
 
+  /* Smooth number transitions */
   .transition-number {
     transition: color 0.6s ease, opacity 0.3s ease;
   }
 
+  /* Animated pulse dot */
   .pulse-dot {
     position: relative;
     display: inline-flex;
@@ -284,7 +304,7 @@
     inset: 0;
     border-radius: 50%;
     background: var(--temp-ok);
-    animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+    animation: ping 1.5s cubic-bezier(0,0,0.2,1) infinite;
   }
   .pulse-dot::after {
     content: "";
@@ -300,13 +320,22 @@
     75%, 100% { transform: scale(2); opacity: 0; }
   }
 
+  /* Sensor card hover lift */
   .card-hover {
     transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
   }
-  .card-hover:hover  { transform: translateY(-3px); box-shadow: var(--shadow-glow); }
-  .card-hover:active { transform: translateY(-1px); }
+  .card-hover:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-glow);
+  }
+  .card-hover:active {
+    transform: translateY(-1px);
+  }
 
-  .gradient-border { position: relative; }
+  /* Animated gradient border */
+  .gradient-border {
+    position: relative;
+  }
   .gradient-border::before {
     content: "";
     position: absolute;
@@ -317,10 +346,14 @@
     opacity: 0;
     transition: opacity 0.3s ease;
   }
-  .gradient-border:hover::before { opacity: 1; }
+  .gradient-border:hover::before {
+    opacity: 1;
+  }
 
+  /* Monospace font */
   .font-mono { font-family: var(--font-mono); }
 
+  /* Page transition */
   .page-enter {
     animation: pageEnter 0.25s ease forwards;
   }

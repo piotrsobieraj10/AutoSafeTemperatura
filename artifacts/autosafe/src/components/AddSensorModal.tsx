@@ -1,60 +1,43 @@
-// AddSensorModal.tsx v2
+// components/AddSensorModal.tsx v2
 import { useState } from "react";
-import {
-  Dialog, DialogContent, DialogDescription,
-  DialogFooter, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
-import { Button }   from "@/components/ui/button";
-import { Input }    from "@/components/ui/input";
-import { Label }    from "@/components/ui/label";
-import {
-  Select, SelectContent, SelectItem,
-  SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import {
-  Bluetooth, BatteryMedium, Gauge, Loader2,
-  Radio, Thermometer, Droplets, Info, Wifi, WifiOff,
-} from "lucide-react";
+import { Bluetooth, BatteryMedium, Gauge, Loader2, Radio, Thermometer, Droplets, Info, Wifi, WifiOff } from "lucide-react";
 import { scanForDevice, type BTDevice } from "@/services/bluetoothService";
 import { sensorProfiles, detectProfileByName, getProfile } from "@/services/sensorProfiles";
 import { upsertSensor } from "@/services/storageService";
 import type { DecodedData, Sensor } from "@/types/sensor";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
-const ROOMS = [
-  "Salon", "Sypialnia", "Kuchnia", "Łazienka", "Garaż",
-  "Kotłownia", "Poddasze", "Biuro", "Piwnica", "Korytarz",
-  "Serwer", "Ogród", "Szklarnia", "Taras",
-];
+const ROOMS = ["Salon","Sypialnia","Kuchnia","Łazienka","Garaż","Kotłownia","Poddasze","Biuro","Piwnica","Korytarz","Serwer","Ogród","Szklarnia","Taras"];
 
 type Step = "scan" | "configure";
 
-interface Props {
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-  onAdded?: () => void;
-}
+interface Props { open: boolean; onOpenChange: (o: boolean) => void; onAdded?: () => void; }
 
 export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
-  const [step, setStep]                         = useState<Step>("scan");
-  const [scanning, setScanning]                 = useState(false);
-  const [device, setDevice]                     = useState<BTDevice | null>(null);
-  const [liveData, setLiveData]                 = useState<DecodedData>({});
+  const [step, setStep]               = useState<Step>("scan");
+  const [scanning, setScanning]       = useState(false);
+  const [device, setDevice]           = useState<BTDevice | null>(null);
+  const [liveData, setLiveData]       = useState<DecodedData>({});
   const [detectedProfileId, setDetectedProfileId] = useState<string | null>(null);
-  const [roomName, setRoomName]                 = useState("Salon");
-  const [customRoom, setCustomRoom]             = useState("");
-  const [customName, setCustomName]             = useState("");
-  const [profileId, setProfileId]               = useState("ela-blue-puck-t");
-  const [minTemp, setMinTemp]                   = useState("");
-  const [maxTemp, setMaxTemp]                   = useState("");
-  const [error, setError]                       = useState<string | null>(null);
+  const [roomName, setRoomName]       = useState("Salon");
+  const [customRoom, setCustomRoom]   = useState("");
+  const [customName, setCustomName]   = useState("");
+  const [profileId, setProfileId]     = useState("ela-blue-puck-t");
+  const [minTemp, setMinTemp]         = useState<string>("");
+  const [maxTemp, setMaxTemp]         = useState<string>("");
+  const [error, setError]             = useState<string | null>(null);
 
   const reset = () => {
     setStep("scan"); setDevice(null); setLiveData({}); setDetectedProfileId(null);
-    setRoomName("Salon"); setCustomRoom(""); setCustomName("");
-    setProfileId("ela-blue-puck-t");
+    setRoomName("Salon"); setCustomRoom(""); setCustomName(""); setProfileId("ela-blue-puck-t");
     setMinTemp(""); setMaxTemp(""); setError(null); setScanning(false);
   };
 
@@ -78,6 +61,7 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
         },
         (e) => setError(e.message)
       );
+
       if (dev && !firstData) {
         setDevice(dev);
         const pid = detectProfileByName(dev.name);
@@ -130,7 +114,7 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex items-center gap-2 font-display">
             <Bluetooth className="h-5 w-5 text-primary" />
             {step === "scan" ? "Skanuj czujnik BLE" : "Konfiguruj czujnik"}
           </DialogTitle>
@@ -141,19 +125,23 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
           </DialogDescription>
         </DialogHeader>
 
+        {/* ── SCAN STEP ── */}
         {step === "scan" && (
           <div className="space-y-4">
+            {/* Supported devices grid */}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {[
-                { name: "ELA Blue Puck T",  icon: <Radio className="h-4 w-4" />,       badge: "Advertisement" },
-                { name: "RuuviTag",          icon: <Gauge className="h-4 w-4" />,        badge: "Temp+Hum+Press" },
-                { name: "Govee H5074",       icon: <Thermometer className="h-4 w-4" />, badge: "Advertisement" },
-                { name: "Inkbird IBS-TH2",   icon: <Thermometer className="h-4 w-4" />, badge: "GATT" },
-                { name: "SensorPush HT1",    icon: <Droplets className="h-4 w-4" />,    badge: "GATT" },
-                { name: "Xiaomi LYWSD03",    icon: <Thermometer className="h-4 w-4" />, badge: "GATT" },
+                { name: "ELA Blue Puck T", icon: <Radio className="h-4 w-4" />, badge: "Advertisement" },
+                { name: "RuuviTag",        icon: <Gauge className="h-4 w-4" />, badge: "Temp+Hum+Press" },
+                { name: "Govee H5074",     icon: <Thermometer className="h-4 w-4" />, badge: "Advertisement" },
+                { name: "Inkbird IBS-TH2", icon: <Thermometer className="h-4 w-4" />, badge: "GATT" },
+                { name: "SensorPush HT1",  icon: <Droplets className="h-4 w-4" />, badge: "GATT" },
+                { name: "Xiaomi LYWSD03",  icon: <Thermometer className="h-4 w-4" />, badge: "GATT" },
               ].map((d) => (
                 <div key={d.name} className="flex flex-col gap-1 rounded-xl border bg-muted/40 p-3">
-                  <div className="flex items-center gap-2 text-sm font-medium">{d.icon} {d.name}</div>
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    {d.icon} {d.name}
+                  </div>
                   <Badge variant="secondary" className="text-[10px] w-fit">{d.badge}</Badge>
                 </div>
               ))}
@@ -163,18 +151,14 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
               <Info className="h-4 w-4 text-primary" />
               <AlertTitle className="text-sm text-primary">ELA / RuuviTag / Govee</AlertTitle>
               <AlertDescription className="text-xs mt-1">
-                Dla czujników Advertisement włącz w Chrome:{" "}
-                <code className="rounded border bg-background px-1.5 py-0.5 font-mono text-[11px]">
+                Dla czujników Advertisement włącz w Chrome:
+                <code className="ml-1 rounded bg-background px-1.5 py-0.5 font-mono text-[11px] border">
                   chrome://flags/#enable-web-bluetooth-scanning → Enabled
                 </code>
               </AlertDescription>
             </Alert>
 
-            {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
+            {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
 
             <Button onClick={handleScan} disabled={scanning} className="w-full" size="lg">
               {scanning
@@ -184,13 +168,15 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
           </div>
         )}
 
+        {/* ── CONFIGURE STEP ── */}
         {step === "configure" && device && (
           <div className="space-y-4">
-            <div className="space-y-3 rounded-2xl border bg-muted/30 p-4">
+            {/* Device preview */}
+            <div className="rounded-2xl border bg-muted/30 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-semibold">{device.name ?? "BLE Sensor"}</div>
-                  <div className="max-w-[220px] truncate font-mono text-xs text-muted-foreground">{device.id}</div>
+                  <div className="font-semibold text-sm">{device.name ?? "BLE Sensor"}</div>
+                  <div className="text-xs text-muted-foreground font-mono truncate max-w-[220px]">{device.id}</div>
                 </div>
                 {liveData.temperature != null && (
                   <div className="flex items-center gap-1.5 rounded-xl bg-primary/10 px-3 py-2 text-primary">
@@ -200,67 +186,53 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
                 )}
               </div>
 
+              {/* Live meta */}
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                 {liveData.humidity != null && (
-                  <span className="flex items-center gap-1">
-                    <Droplets className="h-3.5 w-3.5" />{liveData.humidity.toFixed(1)}%
-                  </span>
+                  <span className="flex items-center gap-1"><Droplets className="h-3.5 w-3.5" />{liveData.humidity.toFixed(1)}%</span>
                 )}
                 {liveData.pressure != null && (
-                  <span className="flex items-center gap-1">
-                    <Gauge className="h-3.5 w-3.5" />{liveData.pressure.toFixed(1)} hPa
-                  </span>
+                  <span className="flex items-center gap-1"><Gauge className="h-3.5 w-3.5" />{liveData.pressure.toFixed(1)} hPa</span>
                 )}
                 {liveData.battery != null && (
-                  <span className="flex items-center gap-1">
-                    <BatteryMedium className="h-3.5 w-3.5" />{liveData.battery}%
-                  </span>
+                  <span className="flex items-center gap-1"><BatteryMedium className="h-3.5 w-3.5" />{liveData.battery}%</span>
                 )}
                 {liveData.rssi != null && (
                   <span className="flex items-center gap-1">
-                    {liveData.rssi > -70
-                      ? <Wifi className="h-3.5 w-3.5" />
-                      : <WifiOff className="h-3.5 w-3.5" />}
+                    {liveData.rssi > -70 ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
                     {liveData.rssi} dBm
                   </span>
                 )}
                 {detectedProfileId && (
                   <Badge variant="secondary" className="text-[10px]">
-                    Auto: {detectedProfileId}
+                    Auto-detect: {detectedProfileId}
                   </Badge>
                 )}
               </div>
             </div>
 
+            {/* Room */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Pomieszczenie</Label>
                 <Select value={roomName} onValueChange={setRoomName}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {ROOMS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                  </SelectContent>
+                  <SelectContent>{ROOMS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
                 <Label>Własna nazwa</Label>
-                <Input
-                  placeholder={roomName}
-                  value={customRoom}
-                  onChange={(e) => setCustomRoom(e.target.value)}
-                />
+                <Input placeholder={roomName} value={customRoom} onChange={(e) => setCustomRoom(e.target.value)} />
               </div>
             </div>
 
+            {/* Custom name */}
             <div className="space-y-1.5">
               <Label>Opis czujnika</Label>
-              <Input
-                placeholder="np. przy oknie, pod sufitem…"
-                value={customName}
-                onChange={(e) => setCustomName(e.target.value)}
-              />
+              <Input placeholder="np. przy oknie, pod sufitem…" value={customName} onChange={(e) => setCustomName(e.target.value)} />
             </div>
 
+            {/* Profile */}
             <div className="space-y-1.5">
               <Label>Profil dekodowania</Label>
               <Select value={profileId} onValueChange={setProfileId}>
@@ -278,6 +250,7 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
               </Select>
             </div>
 
+            {/* Alerts */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Min °C (alert)</Label>

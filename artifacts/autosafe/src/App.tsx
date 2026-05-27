@@ -1,4 +1,4 @@
-import { createRouter, RouterProvider, createRootRoute, createRoute, Outlet, Link } from "@tanstack/react-router";
+import { createRouter, RouterProvider, createRootRoute, createRoute, Link } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { DashboardPage } from "@/pages/DashboardPage";
@@ -11,9 +11,7 @@ const queryClient = new QueryClient();
 const rootRoute = createRootRoute({
   component: () => (
     <QueryClientProvider client={queryClient}>
-      <AppShell>
-        <Outlet />
-      </AppShell>
+      <AppShell />
     </QueryClientProvider>
   ),
   notFoundComponent: () => (

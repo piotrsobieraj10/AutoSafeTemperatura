@@ -12,8 +12,8 @@ const DEMO_SENSORS: Omit<Sensor, "id" | "deviceId" | "status" | "isDemo">[] = [
 ];
 
 const BASE_TEMPS: Record<string, number> = {
-  Salon: 22.4, Sypialnia: 19.8, "Garaż": 7.3,
-  "Łazienka": 23.5, Piwnica: 13.1, "Ogród": 11.4,
+  "Salon": 22.4, "Sypialnia": 19.8, "Garaż": 7.3,
+  "Łazienka": 23.5, "Piwnica": 13.1, "Ogród": 11.4,
 };
 
 export const ensureDemoSensors = () => {
@@ -32,10 +32,7 @@ export const ensureDemoSensors = () => {
 
 export const removeDemoSensors = () => {
   const kept = getSensors().filter((s) => !s.isDemo);
-  if (typeof window !== "undefined") {
-    localStorage.setItem("thermo.v2.sensors", JSON.stringify(kept));
-    window.dispatchEvent(new StorageEvent("storage", { key: "thermo.v2.sensors" }));
-  }
+  localStorage.setItem("thermo.v2.sensors", JSON.stringify(kept));
 };
 
 let demoInterval: ReturnType<typeof setInterval> | null = null;
@@ -48,15 +45,13 @@ export const startDemoLoop = (onUpdate: () => void) => {
     sensors.forEach((s) => {
       const base = BASE_TEMPS[s.roomName] ?? 20;
       const temp = +(base + (Math.random() - 0.5) * 3).toFixed(2);
-      const profileId = s.profileId;
-      const hum = (profileId === "ela-blue-puck-rht" || profileId === "govee-h5074" || profileId === "ruuvi-tag-raw2")
-        ? +(55 + (Math.random() - 0.5) * 20).toFixed(1)
-        : undefined;
-      const pres = profileId === "ruuvi-tag-raw2"
-        ? +(1013 + (Math.random() - 0.5) * 8).toFixed(1)
-        : undefined;
+      const profile = s.profileId;
+      const hum = (profile === "ela-blue-puck-rht" || profile === "govee-h5074" || profile === "ruuvi-tag-raw2")
+        ? +(55 + (Math.random() - 0.5) * 20).toFixed(1) : undefined;
+      const pres = profile === "ruuvi-tag-raw2"
+        ? +(1013 + (Math.random() - 0.5) * 8).toFixed(1) : undefined;
       const rssi = -60 + Math.round((Math.random() - 0.5) * 20);
-      const now  = new Date().toISOString();
+      const now = new Date().toISOString();
       upsertSensor({ ...s, lastTemperature: temp, lastHumidity: hum, lastPressure: pres, lastRssi: rssi, lastReadAt: now, status: "connected" });
       addMeasurement({ id: `${s.id}-${Date.now()}`, sensorId: s.id, roomName: s.roomName, temperature: temp, humidity: hum, pressure: pres, rssi, batteryLevel: s.batteryLevel, createdAt: now });
     });
@@ -68,8 +63,5 @@ export const startDemoLoop = (onUpdate: () => void) => {
 };
 
 export const stopDemoLoop = () => {
-  if (demoInterval) {
-    clearInterval(demoInterval);
-    demoInterval = null;
-  }
+  if (demoInterval) { clearInterval(demoInterval); demoInterval = null; }
 };
