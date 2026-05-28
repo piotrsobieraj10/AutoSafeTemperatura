@@ -1,6 +1,6 @@
 ---
-name: v5 patch conventions
-description: What changed in v5 and what to watch for in future patches.
+name: v5/v6 patch conventions
+description: What changed in v5/v6 and what to watch for in future patches.
 ---
 
 ## Key v5 changes
@@ -24,5 +24,12 @@ description: What changed in v5 and what to watch for in future patches.
 - `supportsHumidity` flag on `SensorProfile` controls whether humidity tile renders in SensorCard v5.6.4. ELA T = false (tile hidden), ELA RHT = true.
 - `compact` prop now hides Pin/Mute buttons (only RefreshCw shown) — DashboardPage passes `compact` to all cards in main grid and pinned section.
 
+## v6 Android APK patch specifics
+- `capacitor.config.ts` `webDir` must be `"dist/public"` (not `"dist"`) — Vite builds to `dist/public/`.
+- `nativeBleService.ts` is a new file — bluetoothService.ts now imports from it (circular-safe: nativeBleService imports types from bluetoothService, not functions).
+- `AutosafeBlePlugin` is a manual one-file plugin registered in `MainActivity.java` via `registerPlugin(...)`. It does NOT appear in `capacitor.plugins.json` (that's only for npm-packaged plugins) — this is correct.
+- Gradle APK build requires JDK + Android SDK not present in Replit. Use GitHub Actions, Android Studio, or a machine with Android SDK to run `./gradlew assembleDebug`.
+- APK output path after Gradle: `android/app/build/outputs/apk/debug/app-debug.apk`.
+
 **Why:** Each zip patch tends to re-introduce the same TypeScript issues unless the patch itself already contains the fixes (v5 does).
-**How to apply:** After applying a future patch, always run `PORT=3000 BASE_PATH=/autosafe pnpm run build` from `artifacts/autosafe`. If errors appear, check the four categories above first.
+**How to apply:** After applying a future patch, always run `PORT=3000 BASE_PATH=/autosafe pnpm run build` from `artifacts/autosafe`. If errors appear, check the categories above first.

@@ -10,6 +10,7 @@
 //   0xFF / Company 0x0757 = bateria z dwóch ostatnich bajtów payloadu jako uint16LE mV
 
 import type { DecodedData, Sensor } from "@/types/sensor";
+import { isNativeBleAvailable, reconnectSensorNative, scanForDeviceNative, stopAllNativeBleActivity } from "./nativeBleService";
 import {
   ALL_COMPANY_IDS,
   COMPANY_IDS,
@@ -101,6 +102,7 @@ const OPTIONAL_SERVICES = [
 const LE_SCAN_TIMEOUT_MS = 45_000;
 
 export const isBluetoothAvailable = async (): Promise<boolean> => {
+  if (isNativeBleAvailable()) return true;
   const bt = getBT();
   if (!bt) return false;
   try { return bt.getAvailability ? await bt.getAvailability() : true; }
@@ -270,12 +272,14 @@ const hasUsefulDecodedData = (data: DecodedData): boolean => (
   Boolean(data.rawManufacturerData)
 );
 
-// Główna funkcja wyboru urządzenia. Dla ELA najważniejszy jest watchAdvertisements, nie GATT.
 export const scanForDevice = async (
   onData: ScanCallback,
   onError?: (e: Error) => void,
   mode: ScanMode = "ela"
 ): Promise<BTDevice | null> => {
+  if (isNativeBleAvailable()) {
+    return scanForDeviceNative(onData, onError, mode);
+  }
   const bt = getBT();
   if (!bt) throw new Error("Web Bluetooth niedostępne. Użyj Chrome na Androidzie i HTTPS.");
 
@@ -405,6 +409,7 @@ export const stopNameScan = (id: string) => {
 };
 
 export const stopAllBleActivity = () => {
+  if (isNativeBleAvailable()) stopAllNativeBleActivity().catch(() => {});
   advControllers.forEach((controller) => { try { controller.abort(); } catch { /* ignore */ } });
   advControllers.clear();
   leScans.forEach(({ handler }) => { try { getBT()?.removeEventListener("advertisementreceived", handler); } catch { /* ignore */ } });
@@ -504,12 +509,11 @@ export const reconnectSensor = async (
 ): Promise<boolean> => {
   const isElaAdv = sensor.profileId.startsWith("ela-blue-puck") || getProfile(sensor.profileId)?.source === "advertisement";
 
-  // v5.4: przy ręcznym kliknięciu „Nasłuchuj BLE” najpierw używamy requestLEScan.
-  // W praktycznych testach Chrome zwraca serviceData tą drogą, a użytkownik nie musi za każdym razem
-  // ponownie wybierać czujnika. Picker zostaje tylko jako fallback.
+  if (isNativeBleAvailable() && isElaAdv) {
+    return reconnectSensorNative(sensor, onData, onError);
+  }
+
   if (isElaAdv && options?.forcePicker) {
-    // v5.4: zaczynamy od requestLEScan. Na testowanym telefonie Chrome zwraca serviceData
-    // właśnie tą drogą, a ponowne okno wyboru czujnika jest niewygodne przy każdym odświeżeniu.
     onError?.(new Error(`Nasłuch BLE aktywny — skanuję reklamy i szukam ${sensor.bluetoothName} po nazwie.`));
     const scanned = await startNameBasedElaScan(sensor, onData, onError);
     if (scanned) return true;

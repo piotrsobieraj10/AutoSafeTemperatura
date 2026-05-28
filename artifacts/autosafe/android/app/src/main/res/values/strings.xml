@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AutoSafe Temperatura</string>
+    <string name="title_activity_main">AutoSafe Temperatura</string>
+    <string name="package_name">im.autosafe.temperatura</string>
+    <string name="custom_url_scheme">im.autosafe.temperatura</string>
+</resources>
