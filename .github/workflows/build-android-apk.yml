@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+env:
+  PORT: 3000
+
 jobs:
   build-android-apk:
     name: Build debug APK
@@ -42,10 +45,14 @@ jobs:
       - name: Build web app
         working-directory: artifacts/autosafe
         run: pnpm run build
+        env:
+          PORT: 3000
 
       - name: Sync Capacitor Android
         working-directory: artifacts/autosafe
         run: pnpm exec cap sync android
+        env:
+          PORT: 3000
 
       - name: Make Gradle executable
         working-directory: artifacts/autosafe/android
