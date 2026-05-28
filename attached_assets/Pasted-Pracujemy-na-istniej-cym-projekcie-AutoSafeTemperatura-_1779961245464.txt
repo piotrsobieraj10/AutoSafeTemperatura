@@ -1,0 +1,106 @@
+Pracujemy na istniejącym projekcie AutoSafeTemperatura.
+
+Wgrałem paczkę:
+AutoSafe_Temperatura_ostatnie_3_patche_v5_6_2_do_v5_6_4.zip
+
+W środku są 3 patche, które trzeba zastosować dokładnie po kolei:
+1. 01_AutoSafe_Temperatura_v5_6_2_patch.zip
+2. 02_AutoSafe_Temperatura_v5_6_3_patch.zip
+3. 03_AutoSafe_Temperatura_v5_6_4_patch.zip
+
+WAŻNE:
+- Nie rób commit ani push bez mojej decyzji.
+- Nie przebudowuj aplikacji od zera.
+- Nie kasuj projektu.
+- Nie zmieniaj repozytorium GitHub.
+- Nie rób force push.
+- Nie cofaj działającego BLE.
+- Nie usuwaj prawdziwego złotego logo AutoSafe.
+- Nie przywracaj starego logo ani nazw Termo.
+- Nie zmieniaj dekoderów ELA Blue PUCK, jeśli nie jest to konieczne.
+- Końcowa wersja w UI ma być AutoSafe_Temperatura_v5.6.4.
+
+Najpierw zrób punkt bezpieczeństwa:
+1. Uruchom:
+   git status
+
+2. Jeśli są niezapisane zmiany, pokaż je i nie nadpisuj ich bez decyzji.
+
+3. Utwórz backup branch:
+   git branch backup-przed-v5-6-2-do-v5-6-4
+
+Kolejność pracy:
+
+ETAP 1 — zastosuj v5.6.2:
+- Rozpakuj 01_AutoSafe_Temperatura_v5_6_2_patch.zip.
+- Zastosuj patch do aktualnego projektu.
+- Ten patch poprawia głównie problem za krótkich/ucinanych nazw czujników i pomieszczeń.
+- Nie ruszaj BLE.
+
+ETAP 2 — zastosuj v5.6.3:
+- Rozpakuj 02_AutoSafe_Temperatura_v5_6_3_patch.zip.
+- Zastosuj patch do aktualnego projektu po v5.6.2.
+- Ten patch poprawia UI/statusy:
+  - pełniejsze nazwy pomieszczeń i Bluetooth,
+  - bardziej kompaktowe karty na telefonie,
+  - statusy Online / Nasłuch / Oczekuje / Stare dane / Offline,
+  - Online do 2 minut,
+  - Offline po ponad 5 minutach,
+  - lepsze komunikaty baterii/RSSI,
+  - poprawiony pusty stan/onboarding,
+  - dodany plan Android APK v6.
+- Nie ruszaj działającego BLE.
+
+ETAP 3 — zastosuj v5.6.4:
+- Rozpakuj 03_AutoSafe_Temperatura_v5_6_4_patch.zip.
+- Zastosuj patch jako końcowy.
+- Ten patch jest finalnym UX dla normalnego użytkownika:
+  - „Nasłuchuj BLE” ma być zmienione na prostsze „Odśwież odczyt”,
+  - główny przycisk ma być „Odśwież wszystkie czujniki”,
+  - kafelek wilgotności ma być ukryty dla czujników ELA Blue PUCK T,
+  - wilgotność ma być pokazana tylko dla RHT albo gdy faktycznie odebrano wilgotność,
+  - mniej technicznych ikonek na kartach kompaktowych,
+  - prostsze komunikaty dla oczekiwania i starych danych,
+  - końcowa wersja w UI ma być AutoSafe_Temperatura_v5.6.4.
+
+BARDZO WAŻNE — BLE ma zostać nienaruszone:
+- Service Data UUID 0x2A6E = temperatura int16LE / 100
+- Service Data UUID 0x2A6F = wilgotność uint16LE / 100
+- Manufacturer Data companyId 0x0757 = bateria mV
+- requestLEScan ma dalej dopasowywać czujniki po nazwie, np. P T EN..., P RHT...
+- aplikacja ma zachowywać temperaturę, wilgotność i baterię między różnymi ramkami BLE
+- bateria nie może znikać, gdy kolejna ramka ma tylko temperaturę
+- monitoring BLE nie może startować samoczynnie po wejściu do aplikacji
+- odczyt/monitoring ma startować tylko po kliknięciu użytkownika
+
+Po zastosowaniu patchy uruchom:
+npm run build
+
+Jeżeli build pokaże błędy TypeScript/React:
+- napraw je bez zmiany założeń,
+- nie usuwaj funkcji,
+- popraw typy/importy/logikę,
+- nie zastępuj aplikacji prostszą wersją.
+
+Po buildzie sprawdź:
+1. Czy aplikacja startuje bez błędu.
+2. Czy wersja w UI to AutoSafe_Temperatura_v5.6.4.
+3. Czy logo jest prawdziwe złote AutoSafe.
+4. Czy nazwy czujników/pomieszczeń mieszczą się lepiej na telefonie.
+5. Czy główny przycisk brzmi „Odśwież wszystkie czujniki”.
+6. Czy przycisk na karcie brzmi „Odśwież odczyt”, a nie technicznie „Nasłuchuj BLE”.
+7. Czy wilgotność jest ukryta dla ELA Blue PUCK T.
+8. Czy wilgotność pokazuje się dla RHT albo po odebraniu 0x2A6F.
+9. Czy statusy Online / Oczekuje / Stare dane / Offline są czytelne.
+10. Czy BLE 0x2A6E / 0x2A6F / 0x0757 nadal działa.
+11. Czy Monitoruj/Odśwież wszystkie nie startuje samo po wejściu na stronę.
+12. Czy eksport CSV i backup/import JSON nadal działają.
+
+Na końcu podaj mi:
+- czy każdy z 3 patchy zastosował się poprawnie,
+- jakie pliki zmieniłeś,
+- czy npm run build przeszedł,
+- czy wersja w UI to AutoSafe_Temperatura_v5.6.4,
+- czy BLE zostało nienaruszone,
+- czy aplikacja startuje bez błędu,
+- wynik git status.

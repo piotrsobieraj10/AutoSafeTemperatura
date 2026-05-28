@@ -18,5 +18,11 @@ description: What changed in v5 and what to watch for in future patches.
 - `BluetoothDevice` global type handled inside bluetoothService via `(window as unknown as ...)` pattern.
 - `formatTemp` accepts `number | undefined` — callers can pass `?? undefined`.
 
+## v5.6.2–v5.6.4 specific fixes
+- `K` must stay `export const K` — `demoService.ts` imports it directly. Patch v5.6.2 removed the `export`, but that breaks the build.
+- Polish curly quotes `„..."` inside JSX string literals (straight-quote delimited) confuse esbuild's parser. Use template literals (backticks) when embedding `„`, `"` (U+201E/U+201D) inside JSX expressions.
+- `supportsHumidity` flag on `SensorProfile` controls whether humidity tile renders in SensorCard v5.6.4. ELA T = false (tile hidden), ELA RHT = true.
+- `compact` prop now hides Pin/Mute buttons (only RefreshCw shown) — DashboardPage passes `compact` to all cards in main grid and pinned section.
+
 **Why:** Each zip patch tends to re-introduce the same TypeScript issues unless the patch itself already contains the fixes (v5 does).
-**How to apply:** After applying a future patch, always run `pnpm exec tsc --noEmit` from `artifacts/autosafe`. If errors appear, check the three categories above first.
+**How to apply:** After applying a future patch, always run `PORT=3000 BASE_PATH=/autosafe pnpm run build` from `artifacts/autosafe`. If errors appear, check the four categories above first.
