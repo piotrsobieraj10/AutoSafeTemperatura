@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Sensor } from "@/types/sensor";
 import { getTempZone } from "@/types/sensor";
 import {
+  STORAGE_EVENT,
   addMeasurement,
   deleteSensor as storageDelete,
   getSensors,
@@ -47,9 +48,11 @@ export function useSensors() {
     setSensors(getSensors());
     const handler = () => safeSetSensors();
     window.addEventListener("storage", handler);
+    window.addEventListener(STORAGE_EVENT, handler);
     const interval = setInterval(() => safeSetSensors(), 3000);
     return () => {
       window.removeEventListener("storage", handler);
+      window.removeEventListener(STORAGE_EVENT, handler);
       clearInterval(interval);
     };
   }, [rev, safeSetSensors]);
@@ -101,17 +104,14 @@ export function useSensors() {
         safeSetSensors();
       };
 
-      // GATT notifications
+      // GATT notifications are a fallback. ELA Blue PUCK RHT/T usually sends data through BLE advertising,
+      // so missing GATT characteristics must not put the sensor into a permanent error state.
       connectGATTWithNotifications(
         device,
         sensor.profileId,
         (result) => handleData({ data: result.data as { temperature?: number; humidity?: number; pressure?: number; rssi?: number; battery?: number } }),
-        (err) => {
-          console.warn(`GATT error (${sensor.roomName}):`, err.message);
-          const current = getSensors().find((s) => s.id === sensor.id);
-          if (current) { upsertSensor({ ...current, status: "error" }); safeSetSensors(); }
-        }
-      ).catch(console.error);
+        (err) => console.warn(`GATT fallback (${sensor.roomName}):`, err.message)
+      ).catch((err) => console.warn(`GATT fallback (${sensor.roomName}):`, err));
 
       // Advertisement watch
       if (typeof device.watchAdvertisements === "function" && device.addEventListener) {

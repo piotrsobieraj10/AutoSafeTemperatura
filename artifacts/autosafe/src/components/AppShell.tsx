@@ -1,12 +1,14 @@
-// components/AppShell.tsx v2
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
-import { Activity, Home, LineChart, Radio, Settings } from "lucide-react";
+import { Activity, Home, LineChart, Settings } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { useEffect, useState } from "react";
 import { getSettings } from "@/services/storageService";
 import { ensureDemoSensors, startDemoLoop, stopDemoLoop } from "@/services/demoService";
 import { useSensors } from "@/hooks/useSensors";
 import { cn } from "@/lib/utils";
+import { BrandMark } from "./BrandMark";
+import { APP_NAME, APP_VERSION } from "@/config/app";
+import { THEME_STORAGE_EVENT, applyTheme, subscribeSystemTheme } from "@/services/themeService";
 
 const NAV = [
   { to: "/",         label: "Dom",        icon: Home },
@@ -21,24 +23,36 @@ export function AppShell() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    const apply = () => applyTheme(getSettings().theme);
+    apply();
+    const unsubscribeSystem = subscribeSystemTheme(apply);
+    window.addEventListener(THEME_STORAGE_EVENT, apply);
+
     const s = getSettings();
-    document.documentElement.classList.toggle("dark", s.theme !== "light");
-    if (s.demoMode) { ensureDemoSensors(); startDemoLoop(() => {}); }
+    if (s.demoMode) {
+      ensureDemoSensors();
+      startDemoLoop(() => {});
+    } else {
+      stopDemoLoop();
+    }
+
     setMounted(true);
-    return () => stopDemoLoop();
+    return () => {
+      stopDemoLoop();
+      unsubscribeSystem();
+      window.removeEventListener(THEME_STORAGE_EVENT, apply);
+    };
   }, []);
 
   if (!mounted) return null;
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-40 border-b border-border/50 bg-background/80 backdrop-blur-xl">
+      <header className="sticky top-0 z-40 border-b border-border/50 bg-background/85 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3.5 sm:px-6">
-          {/* Logo */}
-          <Link to="/" className="flex items-center gap-3 group">
-            <div className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-hero shadow-glow">
-              <Radio className="h-5 w-5 text-white" />
+          <Link to="/" className="group flex items-center gap-3">
+            <div className="relative">
+              <BrandMark compact />
               {alertSensors.length > 0 && (
                 <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-white shadow">
                   {alertSensors.length}
@@ -46,14 +60,13 @@ export function AppShell() {
               )}
             </div>
             <div>
-              <div className="font-display text-base font-bold leading-none tracking-tight group-hover:text-primary transition-colors">
-                Termo ELA
+              <div className="font-display text-base font-bold leading-none tracking-tight transition-colors group-hover:text-primary">
+                {APP_NAME}
               </div>
-              <div className="text-[11px] text-muted-foreground">Monitor temperatury BLE</div>
+              <div className="text-[11px] text-muted-foreground">BLE · ELA Blue PUCK RHT/T · {APP_VERSION}</div>
             </div>
           </Link>
 
-          {/* Desktop nav */}
           <nav className="hidden items-center gap-1 md:flex">
             {NAV.map(({ to, label, icon: Icon }) => {
               const active = location.pathname === to;
@@ -67,7 +80,7 @@ export function AppShell() {
                   <Icon className="h-4 w-4" />
                   {label}
                   {to === "/sensors" && alertSensors.length > 0 && !active && (
-                    <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-destructive border-2 border-background" />
+                    <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-destructive" />
                   )}
                 </Link>
               );
@@ -76,13 +89,11 @@ export function AppShell() {
         </div>
       </header>
 
-      {/* Main */}
-      <main className="mx-auto max-w-6xl px-4 pb-28 pt-6 sm:px-6 page-enter">
+      <main className="page-enter mx-auto max-w-6xl px-4 pb-28 pt-6 sm:px-6">
         <Outlet />
       </main>
 
-      {/* Mobile nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border/50 bg-background/90 backdrop-blur-xl md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border/50 bg-background/92 backdrop-blur-xl md:hidden">
         <div className="mx-auto flex max-w-sm items-center justify-around px-2 py-2">
           {NAV.map(({ to, label, icon: Icon }) => {
             const active = location.pathname === to;

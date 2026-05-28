@@ -362,3 +362,52 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 }
+
+/* AutoSafe premium gold override */
+:root {
+  --background:        oklch(0.985 0.018 86);
+  --foreground:        oklch(0.17 0.025 80);
+  --card:              oklch(1 0.006 86);
+  --card-foreground:   oklch(0.17 0.025 80);
+  --surface:           oklch(0.965 0.018 86);
+  --popover:           oklch(1 0.006 86);
+  --popover-foreground: oklch(0.17 0.025 80);
+  --primary:           oklch(0.68 0.13 82);
+  --primary-foreground: oklch(0.13 0.02 75);
+  --secondary:         oklch(0.94 0.025 86);
+  --secondary-foreground: oklch(0.20 0.025 80);
+  --muted:             oklch(0.945 0.020 86);
+  --muted-foreground:  oklch(0.46 0.035 80);
+  --accent:            oklch(0.92 0.035 82);
+  --accent-foreground: oklch(0.18 0.025 75);
+  --border:            oklch(0.86 0.030 82);
+  --input:             oklch(0.90 0.025 82);
+  --ring:              oklch(0.68 0.13 82);
+  --gradient-hero:     linear-gradient(135deg, #11100d 0%, #2c2110 45%, #c7a04a 100%);
+  --shadow-glow:       0 0 42px -10px oklch(0.72 0.13 82 / 0.42);
+  --shadow-card:       0 2px 12px -3px oklch(0.28 0.04 80 / 0.12), 0 0 0 1px oklch(0.86 0.030 82);
+}
+
+.dark {
+  --background:        oklch(0.105 0.010 82);
+  --foreground:        oklch(0.94 0.018 86);
+  --card:              oklch(0.155 0.016 82);
+  --card-foreground:   oklch(0.94 0.018 86);
+  --surface:           oklch(0.135 0.014 82);
+  --popover:           oklch(0.165 0.018 82);
+  --popover-foreground: oklch(0.94 0.018 86);
+  --primary:           oklch(0.76 0.14 82);
+  --primary-foreground: oklch(0.12 0.018 80);
+  --secondary:         oklch(0.23 0.025 82);
+  --secondary-foreground: oklch(0.92 0.018 86);
+  --muted:             oklch(0.215 0.020 82);
+  --muted-foreground:  oklch(0.70 0.030 86);
+  --accent:            oklch(0.255 0.035 82);
+  --accent-foreground: oklch(0.95 0.018 86);
+  --border:            oklch(0.275 0.030 82);
+  --input:             oklch(0.245 0.025 82);
+  --ring:              oklch(0.76 0.14 82);
+  --gradient-hero:     linear-gradient(135deg, #070706 0%, #1f170b 48%, #a98535 100%);
+  --shadow-glow:       0 0 52px -10px oklch(0.76 0.14 82 / 0.46);
+  --shadow-card:       0 2px 12px -3px oklch(0 0 0 / 0.42), 0 0 0 1px oklch(0.275 0.030 82);
+}

@@ -1,6 +1,7 @@
 import { createRouter, RouterProvider, createRootRoute, createRoute, Link } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { SensorsPage } from "@/pages/SensorsPage";
 import { HistoryPage } from "@/pages/HistoryPage";
@@ -10,9 +11,11 @@ const queryClient = new QueryClient();
 
 const rootRoute = createRootRoute({
   component: () => (
-    <QueryClientProvider client={queryClient}>
-      <AppShell />
-    </QueryClientProvider>
+    <AppErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <AppShell />
+      </QueryClientProvider>
+    </AppErrorBoundary>
   ),
   notFoundComponent: () => (
     <div className="flex min-h-[60vh] items-center justify-center">

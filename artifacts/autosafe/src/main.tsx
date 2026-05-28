@@ -1,16 +1,26 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { DEFAULT_SETTINGS, K, migrateLegacyStorage } from "./services/storageService";
+import { applyTheme } from "./services/themeService";
 
-const themeBootScript = () => {
+const bootTheme = () => {
   try {
-    const raw = localStorage.getItem("thermo.settings.v1");
-    const settings = raw ? JSON.parse(raw) : {};
-    const mode = settings.theme || "auto";
-    const dark = mode === "dark" || (mode === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    document.documentElement.classList.toggle("dark", dark);
-  } catch (_) {}
+    migrateLegacyStorage();
+    const raw = localStorage.getItem(K.SETTINGS);
+    const settings = raw ? JSON.parse(raw) : DEFAULT_SETTINGS;
+    applyTheme(settings.theme ?? "system");
+  } catch {
+    applyTheme("system");
+  }
 };
-themeBootScript();
+
+bootTheme();
+
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
 
 createRoot(document.getElementById("root")!).render(<App />);

@@ -1,0 +1,52 @@
+Pracujemy na istniejącym projekcie AutoSafeTemperatura. 
+Wgrałem plik AutoSafe_Temperatura_v5_patch.zip.
+
+Zadanie:
+1. Najpierw zrób punkt powrotu:
+   - sprawdź git status,
+   - utwórz branch backup przed zmianami, np. backup-przed-v5,
+   - nie nadpisuj historii GitHuba na siłę.
+
+2. Rozpakuj AutoSafe_Temperatura_v5_patch.zip i zastosuj patch do aktualnego projektu, nadpisując istniejące pliki tylko tam, gdzie patch tego wymaga.
+
+3. Nie przebudowuj aplikacji od zera. Nie zmieniaj nazwy repozytorium. Nie usuwaj obecnej struktury projektu, jeśli nie jest to konieczne.
+
+4. Poprawki z patcha mają wdrożyć wersję AutoSafe_Temperatura_v5:
+   - branding AutoSafe Temperatura zamiast Termo/Termo ELA,
+   - poprawny motyw Auto / Jasny / Ciemny,
+   - tryb demo domyślnie wyłączony,
+   - naprawa błędu „coś poszło nie tak” po wyłączeniu demo,
+   - poprawione PWA,
+   - ręczne dodanie czujnika,
+   - skanowanie ELA Blue PUCK RHT/T,
+   - tryb skanowania wszystkich BLE,
+   - poprawione odczyty temperatury i wilgotności,
+   - eksport CSV,
+   - backup/import JSON,
+   - widoczna wersja AutoSafe_Temperatura_v5 w aplikacji.
+
+5. Szczególnie sprawdź problem:
+   - po wyłączeniu trybu demo aplikacja nie może się wysypywać,
+   - aplikacja ma uruchamiać się nawet bez żadnych czujników,
+   - pusty stan ma pokazywać normalny ekran „dodaj czujnik”, a nie błąd.
+
+6. Szczególnie sprawdź Bluetooth:
+   - dodaj osobny przycisk/tryb „Skanuj ELA Blue PUCK RHT/T”,
+   - nie ograniczaj skanowania tylko do standardowego service UUID 0x181A,
+   - szukaj po nazwach/prefixach: P RHT, P T, BPUCK, ELA,
+   - dodaj tryb awaryjny „Skanuj wszystkie urządzenia BLE”,
+   - jeżeli przeglądarka nie pozwala odczytać danych reklamowych BLE, pokaż jasny komunikat zamiast błędu,
+   - czujnik ma być widoczny i możliwy do zapisania nawet wtedy, gdy odczyt danych jeszcze nie jest dostępny.
+
+7. Po zastosowaniu patcha uruchom:
+   npm install
+   npm run build
+
+8. Jeżeli build pokaże błędy TypeScript/React, napraw je bez zmiany założeń funkcjonalnych.
+
+9. Na końcu podaj:
+   - które pliki zmieniłeś,
+   - czy build przeszedł,
+   - jak przetestować na telefonie,
+   - czy git status jest czysty,
+   - czy wersja w UI pokazuje AutoSafe_Temperatura_v5.

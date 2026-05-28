@@ -1,0 +1,15 @@
+{
+  "name": "AutoSafe Temperatura",
+  "short_name": "AutoSafe Temp",
+  "description": "Monitoring temperatury i wilgotności Bluetooth BLE.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#070706",
+  "theme_color": "#c9a451",
+  "orientation": "portrait",
+  "lang": "pl",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

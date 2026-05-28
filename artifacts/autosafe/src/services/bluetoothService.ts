@@ -1,34 +1,26 @@
-// bluetoothService.ts v4 — naprawiony dla Android Chrome + ELA Blue Puck T
-//
-// PROBLEMY z poprzedniej wersji:
-// 1. "Nieznane lub nieobsługiwane urządzenie" na Android Chrome
-//    → NAPRAWKA: filtruj po services UUID zamiast acceptAllDevices
-//      ELA Blue Puck T ogłasza 0x181A (ESS) w Advertisement
-// 2. Temperatura nie pojawia się po sparowaniu
-//    → NAPRAWKA: GATT connect + readValue + startNotifications
-//      działa bez żadnych flag Chrome
-// 3. insertBefore React error
-//    → NAPRAWKA: useSensors hook nie mutuje state podczas render
-
 import type { DecodedData, Sensor } from "@/types/sensor";
 import {
   ALL_COMPANY_IDS,
+  COMPANY_IDS,
+  ELA_ENVIRONMENTAL_SERVICE_UUID,
+  ELA_HUMIDITY_UUID,
+  ELA_TEMP_UUID,
+  decodeELAManufacturerFrame,
+  decodeELAServiceFrame,
   detectProfileByCompanyId,
   detectProfileByName,
-  ELA_SERVICE_UUID,
-  ELA_TEMP_UUID,
   getProfile,
-  sensorProfiles,
 } from "./sensorProfiles";
 
 interface NavWithBT extends Navigator { bluetooth?: BTAPI; }
 interface BTAPI {
   requestDevice: (o: RequestDeviceOptions) => Promise<BTDevice>;
   getAvailability?: () => Promise<boolean>;
+  getDevices?: () => Promise<BTDevice[]>;
 }
 interface RequestDeviceOptions {
   acceptAllDevices?: boolean;
-  filters?: Array<{ services?: string[]; namePrefix?: string }>;
+  filters?: Array<{ services?: string[]; name?: string; namePrefix?: string }>;
   optionalServices?: string[];
   optionalManufacturerData?: number[];
 }
@@ -64,7 +56,9 @@ export interface BTAdvEvent extends Event {
 
 const deviceCache    = new Map<string, BTDevice>();
 const advControllers = new Map<string, AbortController>();
+
 const getBT = (): BTAPI | undefined => (navigator as NavWithBT).bluetooth;
+const nowMessage = (e: unknown) => e instanceof Error ? e.message : String(e);
 
 export const isBluetoothAvailable = async (): Promise<boolean> => {
   const bt = getBT();
@@ -75,7 +69,7 @@ export const isBluetoothAvailable = async (): Promise<boolean> => {
 
 export const isAdvertisementScanSupported = (): boolean => {
   try {
-    const p = (window as unknown as { BluetoothDevice?: { prototype: unknown } }).BluetoothDevice?.prototype as unknown as Record<string, unknown>;
+    const p = (window as unknown as { BluetoothDevice?: { prototype: unknown } }).BluetoothDevice?.prototype as Record<string, unknown> | undefined;
     return typeof p?.watchAdvertisements === "function";
   } catch { return false; }
 };
@@ -84,74 +78,150 @@ export interface ScanResult {
   device: BTDevice;
   detectedProfileId: string | null;
   data: DecodedData;
+  note?: string;
 }
 export type ScanCallback = (r: ScanResult) => void;
+export type ScanMode = "ela" | "all";
 
-// ── Dekoder temperatury ELA (int16 LE / 100) ─────────────────
-const decodeTemp = (dv: DataView): number | undefined => {
-  if (dv.byteLength < 2) return undefined;
-  const raw = dv.getInt16(0, true);
-  // ELA format: /100 (np. 2441 = 24.41°C)
-  let temp = raw / 100;
-  if (temp >= -40 && temp <= 100) return Math.round(temp * 100) / 100;
-  // Alternatywny format: /10
-  temp = raw / 10;
-  if (temp >= -40 && temp <= 100) return Math.round(temp * 10) / 10;
-  return undefined;
+const optionalServices = [
+  ELA_ENVIRONMENTAL_SERVICE_UUID,
+  ELA_TEMP_UUID,
+  ELA_HUMIDITY_UUID,
+  "battery_service",
+  "device_information",
+  "health_thermometer",
+  "environmental_sensing",
+  "ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6",
+  "ef090000-11d6-42ba-93b8-9dd7ec090ab0",
+  "0000fff0-0000-1000-8000-00805f9b34fb",
+];
+
+const ELA_NAME_FILTERS = [
+  { namePrefix: "P RHT" },
+  { namePrefix: "P RHT " },
+  { namePrefix: "P T" },
+  { namePrefix: "P T " },
+  { namePrefix: "BPUCK" },
+  { namePrefix: "BLUE PUCK" },
+  { namePrefix: "Blue PUCK" },
+  { namePrefix: "ELA" },
+  { services: [ELA_ENVIRONMENTAL_SERVICE_UUID] },
+] as Array<{ services?: string[]; namePrefix?: string }>;
+
+const COMMON_BLE_FILTERS = [
+  ...ELA_NAME_FILTERS,
+  { services: ["health_thermometer"] },
+  { services: ["environmental_sensing"] },
+  { services: ["ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6"] },
+  { services: ["ef090000-11d6-42ba-93b8-9dd7ec090ab0"] },
+  { services: ["0000fff0-0000-1000-8000-00805f9b34fb"] },
+];
+
+const hasUsefulPayload = (data: DecodedData) =>
+  data.temperature !== undefined || data.humidity !== undefined || data.pressure !== undefined || data.battery !== undefined || data.rssi !== undefined;
+
+const mergeDecoded = (target: DecodedData, incoming: DecodedData) => {
+  if (incoming.temperature !== undefined) target.temperature = incoming.temperature;
+  if (incoming.humidity !== undefined) target.humidity = incoming.humidity;
+  if (incoming.pressure !== undefined) target.pressure = incoming.pressure;
+  if (incoming.battery !== undefined) target.battery = incoming.battery;
+  if (incoming.batteryVoltage !== undefined) target.batteryVoltage = incoming.batteryVoltage;
+  if (incoming.rssi !== undefined) target.rssi = incoming.rssi;
+  return target;
 };
 
-// ── Główna funkcja skanowania ────────────────────────────────
+const decodeAdvertisementEvent = (event: BTAdvEvent, hintProfileId: string | null): { profileId: string | null; data: DecodedData } => {
+  let profileId = hintProfileId ?? detectProfileByName(event.device.name);
+  const data: DecodedData = {};
+  if (event.rssi !== undefined) data.rssi = event.rssi;
+
+  if (event.serviceData) {
+    for (const [uuid, raw] of event.serviceData) {
+      const decodedEla = decodeELAServiceFrame(uuid, raw);
+      if (hasUsefulPayload(decodedEla)) {
+        mergeDecoded(data, decodedEla);
+        profileId = profileId ?? (data.humidity !== undefined ? "ela-blue-puck-rht" : "ela-blue-puck-t");
+      }
+
+      const profile = profileId ? getProfile(profileId) : undefined;
+      if (profile?.decodeAdvertisement && !uuid.toLowerCase().includes("2a6")) {
+        try { mergeDecoded(data, profile.decodeAdvertisement(raw, event.rssi)); } catch {}
+      }
+    }
+  }
+
+  if (event.manufacturerData) {
+    for (const [companyId, rawData] of event.manufacturerData) {
+      if (companyId === COMPANY_IDS.ELA) {
+        const decodedEla = decodeELAManufacturerFrame(rawData);
+        if (hasUsefulPayload(decodedEla)) {
+          mergeDecoded(data, decodedEla);
+          profileId = profileId ?? (decodedEla.humidity !== undefined ? "ela-blue-puck-rht" : "ela-blue-puck-t");
+        }
+        continue;
+      }
+
+      const detected = detectProfileByCompanyId(companyId);
+      const profile = getProfile(detected ?? undefined);
+      if (!profile?.decodeAdvertisement) continue;
+      try {
+        const decoded = profile.decodeAdvertisement(rawData, event.rssi);
+        if (hasUsefulPayload(decoded)) {
+          mergeDecoded(data, decoded);
+          profileId = detected;
+        }
+      } catch {}
+    }
+  }
+
+  return { profileId, data };
+};
+
+const requestBTDevice = async (mode: ScanMode): Promise<BTDevice> => {
+  const bt = getBT();
+  if (!bt) throw new Error("Web Bluetooth niedostępne. Użyj Chrome na Androidzie albo wersji APK.");
+
+  const opts: RequestDeviceOptions = mode === "all"
+    ? { acceptAllDevices: true, optionalServices, optionalManufacturerData: ALL_COMPANY_IDS }
+    : { filters: COMMON_BLE_FILTERS, optionalServices, optionalManufacturerData: ALL_COMPANY_IDS };
+
+  return bt.requestDevice(opts);
+};
+
 export const scanForDevice = async (
   onData: ScanCallback,
-  onError?: (e: Error) => void
+  onError?: (e: Error) => void,
+  options: { mode?: ScanMode } = {},
 ): Promise<BTDevice | null> => {
   const bt = getBT();
-  if (!bt) throw new Error("Web Bluetooth niedostępne. Użyj Chrome na Androidzie.");
+  if (!bt) throw new Error("Web Bluetooth niedostępne. Na iPhone PWA nie ma dostępu do Bluetooth — użyj Android Chrome albo APK.");
 
-  const optionalServices = [
-    "0000181a-0000-1000-8000-00805f9b34fb", // ESS
-    ELA_SERVICE_UUID,
-    ELA_TEMP_UUID,
-    "health_thermometer",
-    "environmental_sensing",
-    "ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6",
-    "ef090000-11d6-42ba-93b8-9dd7ec090ab0",
-    "0000fff0-0000-1000-8000-00805f9b34fb",
-  ];
-
-  // KLUCZOWE: filters po serviceUUID zamiast acceptAllDevices
-  // Dzięki temu Android Chrome pokazuje urządzenia z nazwą
-  const device = await bt.requestDevice({
-    filters: [
-      { services: ["0000181a-0000-1000-8000-00805f9b34fb"] }, // ELA ESS
-      { services: ["health_thermometer"] },
-      { services: ["environmental_sensing"] },
-      { services: ["ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6"] },
-      { services: ["ef090000-11d6-42ba-93b8-9dd7ec090ab0"] },
-      { services: ["0000fff0-0000-1000-8000-00805f9b34fb"] },
-    ],
-    optionalServices,
-    optionalManufacturerData: ALL_COMPANY_IDS,
-  });
-
+  const device = await requestBTDevice(options.mode ?? "ela");
   if (!device?.id) return null;
+
   deviceCache.set(device.id, device);
+  const hintProfileId = detectProfileByName(device.name) ?? "ela-blue-puck-rht";
 
-  const hintProfileId = detectProfileByName(device.name);
+  // Ważne: po wyborze urządzenia od razu przechodzimy do konfiguracji.
+  // Wcześniej ekran czekał na temperaturę, a Blue PUCK RHT jest głównie advertising-only.
+  onData({ device, detectedProfileId: hintProfileId, data: {}, note: "selected" });
 
-  // Krok 1: GATT connect + natychmiastowy odczyt + notifications
-  // Robi to zawsze — działa bez żadnych flag Chrome
-  connectGATTWithNotifications(device, hintProfileId, onData, onError);
-
-  // Krok 2: Advertisement watch (opcjonalny, jeśli flaga włączona)
   if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
-    startAdvWatch(device, hintProfileId, onData, onError).catch(() => {});
+    startAdvWatch(device, hintProfileId, onData, onError).catch((e) => {
+      onError?.(new Error(`Nie udało się uruchomić nasłuchu ramek BLE: ${nowMessage(e)}`));
+    });
   }
+
+  // Fallback GATT. Dla ELA brak charakterystyki nie jest błędem krytycznym, bo dane lecą w reklamach BLE.
+  connectGATTWithNotifications(device, hintProfileId, onData, (e) => {
+    const msg = e.message.toLowerCase();
+    if (msg.includes("nie znaleziono") || msg.includes("gatt") || msg.includes("not found")) return;
+    onError?.(e);
+  }).catch(() => {});
 
   return device;
 };
 
-// ── GATT connect + readValue + startNotifications ────────────
 export const connectGATTWithNotifications = async (
   device: BTDevice,
   hintProfileId: string | null,
@@ -162,123 +232,87 @@ export const connectGATTWithNotifications = async (
   try {
     const server = await device.gatt.connect();
 
-    // Próbuj kolejne serwisy
     const serviceUUIDs = [
-      "0000181a-0000-1000-8000-00805f9b34fb", // ESS (ELA)
+      ELA_ENVIRONMENTAL_SERVICE_UUID,
       "environmental_sensing",
       "health_thermometer",
     ];
     const charUUIDs = [
-      "00002a6e-0000-1000-8000-00805f9b34fb", // Temperature (ELA)
+      ELA_TEMP_UUID,
+      ELA_HUMIDITY_UUID,
       "temperature_measurement",
       "temperature",
+      "humidity",
     ];
 
-    let char: BTGATTChar | null = null;
-
     for (const svcUUID of serviceUUIDs) {
-      if (char) break;
-      try {
-        const svc = await server.getPrimaryService(svcUUID);
-        for (const chUUID of charUUIDs) {
-          try {
-            char = await svc.getCharacteristic(chUUID);
-            break;
-          } catch { /* next */ }
-        }
-      } catch { /* next service */ }
-    }
+      let service: BTGATTService;
+      try { service = await server.getPrimaryService(svcUUID); }
+      catch { continue; }
 
-    if (!char) {
-      onError?.(new Error("Nie znaleziono charakterystyki temperatury. Sprawdź profil czujnika."));
-      return;
-    }
+      for (const chUUID of charUUIDs) {
+        try {
+          const char = await service.getCharacteristic(chUUID);
+          const emitValue = (value: DataView) => {
+            const uuid = chUUID.toLowerCase().includes("2a6f") || chUUID.toLowerCase().includes("humidity") ? ELA_HUMIDITY_UUID : ELA_TEMP_UUID;
+            const decoded = decodeELAServiceFrame(uuid, value);
+            if (hasUsefulPayload(decoded)) {
+              onData({
+                device,
+                detectedProfileId: hintProfileId ?? (decoded.humidity !== undefined ? "ela-blue-puck-rht" : "ela-blue-puck-t"),
+                data: decoded,
+              });
+            }
+          };
 
-    // Natychmiastowy odczyt
-    try {
-      const value = await char.readValue();
-      const temp = decodeTemp(value);
-      if (temp !== undefined) {
-        onData({
-          device,
-          detectedProfileId: hintProfileId ?? "ela-blue-puck-t",
-          data: { temperature: temp },
-        });
-      }
-    } catch { /* kontynuuj do notifications */ }
+          try { emitValue(await char.readValue()); } catch {}
 
-    // Live updates przez notifications
-    if (char.startNotifications && char.addEventListener) {
-      try {
-        await char.startNotifications();
-        char.addEventListener("characteristicvaluechanged", (e: Event) => {
-          const ev = e as Event & { target: { value: DataView } };
-          if (!ev.target?.value) return;
-          const temp = decodeTemp(ev.target.value);
-          if (temp !== undefined) {
-            onData({
-              device,
-              detectedProfileId: hintProfileId ?? "ela-blue-puck-t",
-              data: { temperature: temp },
-            });
+          if (char.startNotifications && char.addEventListener) {
+            try {
+              await char.startNotifications();
+              char.addEventListener("characteristicvaluechanged", (e: Event) => {
+                const ev = e as Event & { target?: { value?: DataView } };
+                if (ev.target?.value) emitValue(ev.target.value);
+              });
+            } catch {}
           }
-        });
-      } catch { /* notifications opcjonalne */ }
+        } catch { /* next characteristic */ }
+      }
     }
-
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (!msg.toLowerCase().includes("gatt") && !msg.toLowerCase().includes("disconnect")) {
-      onError?.(new Error(`Błąd GATT: ${msg}`));
-    }
+    onError?.(new Error(`Błąd GATT: ${nowMessage(e)}`));
   }
 };
 
-// ── Advertisement watch ──────────────────────────────────────
 export const startAdvWatch = async (
   device: BTDevice,
   hintProfileId: string | null,
   onData: ScanCallback,
   onError?: (e: Error) => void
 ): Promise<AbortController> => {
+  stopAdvWatch(device.id);
   const controller = new AbortController();
   advControllers.set(device.id, controller);
 
   const handler = (event: BTAdvEvent) => {
-    const rssi = event.rssi ?? undefined;
-
-    if (event.serviceData) {
-      for (const [uuid, data] of event.serviceData) {
-        if (uuid.toLowerCase().includes("2a6e")) {
-          const temp = decodeTemp(data);
-          if (temp !== undefined) {
-            onData({ device, detectedProfileId: hintProfileId ?? "ela-blue-puck-t", data: { temperature: temp, rssi } });
-            return;
-          }
-        }
+    try {
+      const decoded = decodeAdvertisementEvent(event, hintProfileId);
+      if (hasUsefulPayload(decoded.data)) {
+        onData({ device, detectedProfileId: decoded.profileId, data: decoded.data });
       }
-    }
-
-    if (event.manufacturerData) {
-      for (const [companyId, rawData] of event.manufacturerData) {
-        const profileId = detectProfileByCompanyId(companyId);
-        if (!profileId) continue;
-        const profile = getProfile(profileId);
-        if (!profile?.decodeAdvertisement) continue;
-        try {
-          const decoded = profile.decodeAdvertisement(rawData, rssi);
-          if (decoded.temperature !== undefined) {
-            onData({ device, detectedProfileId: profileId, data: { ...decoded, rssi } });
-          }
-        } catch { /* ignore */ }
-      }
+    } catch (e) {
+      onError?.(new Error(`Błąd dekodowania ramki BLE: ${nowMessage(e)}`));
     }
   };
 
   device.addEventListener?.("advertisementreceived", handler);
   try {
     await device.watchAdvertisements?.({ signal: controller.signal });
-  } catch (e) { throw e; }
+  } catch (e) {
+    device.removeEventListener?.("advertisementreceived", handler);
+    advControllers.delete(device.id);
+    throw e;
+  }
 
   controller.signal.addEventListener("abort", () => {
     device.removeEventListener?.("advertisementreceived", handler);
@@ -290,18 +324,32 @@ export const stopAdvWatch    = (id: string)    => { advControllers.get(id)?.abor
 export const getCachedDevice = (id: string)    => deviceCache.get(id);
 export const disconnectGATT  = (d: BTDevice)   => d.gatt?.disconnect();
 
+export const restoreGrantedDevices = async (): Promise<BTDevice[]> => {
+  const bt = getBT();
+  if (!bt?.getDevices) return [];
+  const devices = await bt.getDevices();
+  devices.forEach((d) => deviceCache.set(d.id, d));
+  return devices;
+};
+
 export const reconnectSensor = async (
   sensor: Sensor,
   onData: ScanCallback,
   onError?: (e: Error) => void
 ): Promise<boolean> => {
-  const device = deviceCache.get(sensor.deviceId);
-  if (!device) return false;
-  stopAdvWatch(device.id);
-  await connectGATTWithNotifications(device, sensor.profileId, onData, onError);
-  if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
-    startAdvWatch(device, sensor.profileId, onData, onError).catch(() => {});
+  let device = deviceCache.get(sensor.deviceId);
+  if (!device) {
+    const restored = await restoreGrantedDevices();
+    device = restored.find((d) => d.id === sensor.deviceId || d.name === sensor.bluetoothName);
+    if (device) deviceCache.set(device.id, device);
   }
+  if (!device) return false;
+
+  stopAdvWatch(device.id);
+  if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
+    startAdvWatch(device, sensor.profileId, onData, onError).catch((e) => onError?.(e instanceof Error ? e : new Error(String(e))));
+  }
+  await connectGATTWithNotifications(device, sensor.profileId, onData, onError);
   return true;
 };
 
@@ -310,7 +358,7 @@ export const readSensorGATT = async (device: BTDevice, profileId: string): Promi
   if (!profile?.serviceUuid || !profile?.characteristicUuid || !profile.decodeGatt) {
     throw new Error("Profil GATT niekompletny.");
   }
-  if (!device.gatt) throw new Error("Urządzenie bez GATT.");
+  if (!device.gatt) throw new Error("Urządzenie bez GATT. Ten czujnik najpewniej wysyła dane tylko w ramkach BLE advertising.");
   const server  = await device.gatt.connect();
   const service = await server.getPrimaryService(profile.serviceUuid);
   const char    = await service.getCharacteristic(profile.characteristicUuid);

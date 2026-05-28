@@ -1,81 +1,112 @@
-// ============================================================
-// sensorProfiles.ts v3 — ZWERYFIKOWANE protokoły
-//
-// ELA Blue Puck T — ZWERYFIKOWANY na rzeczywistym pakiecie:
-//   Raw: 02 01 06 05 16 6E 2A 89 09 0E 09 50 20 54 20 45 4E 20 38 31 30 31 42 31
-//   AD Type 0x16 = Service Data 16-bit UUID
-//   UUID: 0x2A6E (GATT Temperature Characteristic)
-//   Data: int16 little-endian / 100 = °C
-//   Przykład: 89 09 → 0x0989 = 2441 → 24.41°C ✅
-//
-//   WAŻNE: NIE używa Manufacturer Specific Data (0xFF)!
-//   Używa Service Data (0x16) z UUID 0x2A6E.
-//   Działa przez GATT connect (characteristic 0x2A6E) LUB
-//   przez Advertisement serviceData w watchAdvertisements().
-// ============================================================
-
 import type { SensorProfile, DecodedData } from "@/types/sensor";
 
-// ── UUID ELA Blue Puck T ────────────────────────────────────
-// UUID serwisu który zawiera dane temperatury
-export const ELA_SERVICE_UUID   = "0000181a-0000-1000-8000-00805f9b34fb"; // ESS
-export const ELA_TEMP_UUID      = "00002a6e-0000-1000-8000-00805f9b34fb"; // Temperature
-export const ELA_SERVICE_UUID_SHORT = 0x181A; // Environmental Sensing Service
-export const ELA_TEMP_UUID_SHORT    = 0x2A6E; // Temperature
+// ELA Blue PUCK uses BLE advertising Service Data frames.
+// T:  Service Data UUID 0x2A6E, int16 little-endian, 0.01°C.
+// RHT: Service Data UUID 0x2A6E for temperature and 0x2A6F for humidity.
+export const ELA_ENVIRONMENTAL_SERVICE_UUID = "0000181a-0000-1000-8000-00805f9b34fb";
+export const ELA_TEMP_UUID      = "00002a6e-0000-1000-8000-00805f9b34fb";
+export const ELA_HUMIDITY_UUID  = "00002a6f-0000-1000-8000-00805f9b34fb";
+export const ELA_TEMP_UUID_SHORT     = 0x2A6E;
+export const ELA_HUMIDITY_UUID_SHORT = 0x2A6F;
+export const ELA_COMPANY_ID = 0x0757;
 
-// Company IDs (dla innych czujników)
 export const COMPANY_IDS = {
+  ELA:     ELA_COMPANY_ID,
   RUUVI:   0x0499,
   GOVEE:   0xEC88,
   INKBIRD: 0x0200,
 } as const;
 
-// ── ELA Blue Puck T dekoder ─────────────────────────────────
-// Service Data format: [UUID_lo(1)][UUID_hi(1)][Temp_lo(1)][Temp_hi(1)]
-// Po odebraniu przez Web Bluetooth serviceData Map<string,DataView>
-// klucz = "0000181a-0000-1000-8000-00805f9b34fb" lub "0000ffxx..."
-// value DataView zawiera: bajty PO UUID (czyli samo 89 09 dla temp)
-function decodeELAServiceData(data: DataView): DecodedData {
-  // Web Bluetooth serviceData zawiera dane BEZ UUID (już wycięty jako klucz)
-  // Więc data = [Temp_lo, Temp_hi] = np. [0x89, 0x09]
-  if (data.byteLength < 2) return {};
-  const rawTemp = data.getInt16(0, true); // little-endian int16
-  const temp = rawTemp / 100;             // jednostka: 0.01°C
-  if (temp < -40 || temp > 100) return {};
-  return { temperature: Math.round(temp * 100) / 100 };
-}
+const clampRound = (value: number, min: number, max: number, decimals = 2): number | undefined => {
+  if (!Number.isFinite(value) || value < min || value > max) return undefined;
+  const p = 10 ** decimals;
+  return Math.round(value * p) / p;
+};
 
-// Alternatywny dekoder gdy serviceData zawiera też UUID (raw Advertisement)
-function decodeELAServiceDataWithUUID(data: DataView): DecodedData {
-  // Format z UUID: [6E][2A][89][09]
-  // Sprawdź czy zaczyna się od UUID 0x2A6E (LE)
-  if (data.byteLength >= 4) {
-    const uuid = data.getUint16(0, true);
-    if (uuid === ELA_TEMP_UUID_SHORT) {
-      const rawTemp = data.getInt16(2, true);
-      const temp = rawTemp / 100;
-      if (temp >= -40 && temp <= 100) return { temperature: Math.round(temp * 100) / 100 };
-    }
+const bytesOf = (data: DataView): number[] => Array.from({ length: data.byteLength }, (_, i) => data.getUint8(i));
+
+export const decodeELATemperatureValue = (data: DataView, offset = 0): number | undefined => {
+  if (data.byteLength < offset + 2) return undefined;
+  const raw = data.getInt16(offset, true);
+  return clampRound(raw / 100, -40, 100, 2) ?? clampRound(raw / 10, -40, 100, 1);
+};
+
+export const decodeELAHumidityValue = (data: DataView, offset = 0): number | undefined => {
+  if (data.byteLength <= offset) return undefined;
+  if (data.byteLength >= offset + 2) {
+    const rawHundredths = data.getUint16(offset, true) / 100;
+    const rounded = clampRound(rawHundredths, 0, 100, 2);
+    if (rounded !== undefined && data.getUint8(offset + 1) !== 0) return rounded;
   }
-  // Próbuj bez UUID
-  if (data.byteLength >= 2) {
-    const rawTemp = data.getInt16(0, true);
-    const temp = rawTemp / 100;
-    if (temp >= -40 && temp <= 100) return { temperature: Math.round(temp * 100) / 100 };
+  return clampRound(data.getUint8(offset), 0, 100, 0);
+};
+
+function decodeELAServiceData(data: DataView): DecodedData {
+  const direct = decodeELATemperatureValue(data, 0);
+  if (direct !== undefined) return { temperature: direct };
+
+  const bytes = bytesOf(data);
+  for (let i = 0; i <= bytes.length - 4; i += 1) {
+    if (bytes[i] === 0x6e && bytes[i + 1] === 0x2a) {
+      const value = decodeELATemperatureValue(new DataView(data.buffer, data.byteOffset + i + 2, data.byteLength - i - 2), 0);
+      if (value !== undefined) return { temperature: value };
+    }
   }
   return {};
 }
 
-// GATT dekoder (dla połączenia bezpośredniego)
-function decodeELAGATT(data: DataView): DecodedData {
-  if (data.byteLength < 2) return {};
-  const rawTemp = data.getInt16(0, true);
-  const temp = rawTemp / 100;
-  if (temp < -40 || temp > 100) return {};
-  return { temperature: Math.round(temp * 100) / 100 };
+function decodeELARhtHumidityServiceData(data: DataView): DecodedData {
+  const direct = decodeELAHumidityValue(data, 0);
+  if (direct !== undefined) return { humidity: direct };
+
+  const bytes = bytesOf(data);
+  for (let i = 0; i <= bytes.length - 3; i += 1) {
+    if (bytes[i] === 0x6f && bytes[i + 1] === 0x2a) {
+      const value = decodeELAHumidityValue(new DataView(data.buffer, data.byteOffset + i + 2, data.byteLength - i - 2), 0);
+      if (value !== undefined) return { humidity: value };
+    }
+  }
+  return {};
 }
 
-// ── RuuviTag RAW v2 ─────────────────────────────────────────
+function decodeELAManufacturerData(data: DataView): DecodedData {
+  const bytes = bytesOf(data);
+  const decoded: DecodedData = {};
+
+  for (let i = 0; i < bytes.length; i += 1) {
+    // ELA T / RHT manufacturer frame: TEMP_DATA_ID 0x12 + temp LSB/MSB.
+    if (bytes[i] === 0x12 && i + 2 < bytes.length) {
+      const value = decodeELATemperatureValue(new DataView(data.buffer, data.byteOffset + i + 1, data.byteLength - i - 1), 0);
+      if (value !== undefined) decoded.temperature = value;
+    }
+
+    // ELA RHT manufacturer frame: RHT_DATA_ID 0x21 + RH byte + TEMP_DATA_ID 0x12 + temp.
+    if (bytes[i] === 0x21 && i + 1 < bytes.length) {
+      const humidity = clampRound(bytes[i + 1], 0, 100, 0);
+      if (humidity !== undefined) decoded.humidity = humidity;
+    }
+  }
+
+  // Some gateways expose raw service-data bytes inside manufacturerData.
+  for (let i = 0; i <= bytes.length - 4; i += 1) {
+    if (bytes[i] === 0x6e && bytes[i + 1] === 0x2a) {
+      const temp = decodeELATemperatureValue(new DataView(data.buffer, data.byteOffset + i + 2, data.byteLength - i - 2), 0);
+      if (temp !== undefined) decoded.temperature = temp;
+    }
+    if (bytes[i] === 0x6f && bytes[i + 1] === 0x2a) {
+      const humidity = decodeELAHumidityValue(new DataView(data.buffer, data.byteOffset + i + 2, data.byteLength - i - 2), 0);
+      if (humidity !== undefined) decoded.humidity = humidity;
+    }
+  }
+
+  return decoded;
+}
+
+function decodeELAGATT(data: DataView): DecodedData {
+  const temperature = decodeELATemperatureValue(data, 0);
+  return temperature === undefined ? {} : { temperature };
+}
+
 function decodeRuuvi(data: DataView): DecodedData {
   if (data.byteLength < 24) return {};
   if (data.getUint8(0) !== 5) return {};
@@ -95,7 +126,6 @@ function decodeRuuvi(data: DataView): DecodedData {
   };
 }
 
-// ── Govee H5074/H5075 ───────────────────────────────────────
 function decodeGovee(data: DataView): DecodedData {
   if (data.byteLength < 4) return {};
   const raw = (data.getUint8(1) << 16) | (data.getUint8(2) << 8) | data.getUint8(3);
@@ -110,7 +140,6 @@ function decodeGovee(data: DataView): DecodedData {
   };
 }
 
-// ── Inkbird IBS-TH2 ─────────────────────────────────────────
 function decodeInkbird(data: DataView): DecodedData {
   if (data.byteLength < 6) return {};
   return {
@@ -120,7 +149,6 @@ function decodeInkbird(data: DataView): DecodedData {
   };
 }
 
-// ── SensorPush HT1 ──────────────────────────────────────────
 function decodeSensorPush(data: DataView): DecodedData {
   if (data.byteLength < 4) return {};
   return {
@@ -129,7 +157,6 @@ function decodeSensorPush(data: DataView): DecodedData {
   };
 }
 
-// ── Xiaomi LYWSD03MMC ───────────────────────────────────────
 function decodeXiaomi(data: DataView): DecodedData {
   if (data.byteLength < 3) return {};
   return {
@@ -138,7 +165,6 @@ function decodeXiaomi(data: DataView): DecodedData {
   };
 }
 
-// ── GATT Health Thermometer ─────────────────────────────────
 function decodeHealthThermometer(data: DataView): DecodedData {
   if (data.byteLength < 5) return {};
   const flags    = data.getUint8(0);
@@ -150,24 +176,36 @@ function decodeHealthThermometer(data: DataView): DecodedData {
   return { temperature: Math.round(temp * 100) / 100 };
 }
 
-// ══════════════════════════════════════════════════════════════
-// PROFILE REGISTRY
-// ══════════════════════════════════════════════════════════════
 export const sensorProfiles: SensorProfile[] = [
-
-  // ── ELA Blue Puck T — ZWERYFIKOWANY ──────────────────────
-  // Protokół: Service Data UUID 0x2A6E, int16 LE / 100 = °C
-  // Nazwa BLE: "P T EN xxxxxxx" lub "BPUCK_T_xxxxxx"
-  // Advertisement interval: ~1000ms
+  {
+    id: "ela-blue-puck-rht",
+    name: "ELA Blue PUCK RHT",
+    manufacturer: "ELA Innovation",
+    model: "Blue PUCK RHT",
+    icon: "droplets",
+    serviceUuid: ELA_ENVIRONMENTAL_SERVICE_UUID,
+    characteristicUuid: ELA_TEMP_UUID,
+    manufacturerId: COMPANY_IDS.ELA,
+    supportsTemperature: true,
+    supportsHumidity:    true,
+    supportsPressure:    false,
+    supportsBattery:     false,
+    supportsRssi:        true,
+    source: "advertisement",
+    tempRange: [-30, 85],
+    description: "Priorytetowy profil AutoSafe: temperatura z Service Data 0x2A6E i wilgotność z Service Data 0x2A6F / ramki RHT.",
+    decodeAdvertisement: decodeELAManufacturerData,
+    decodeGatt: decodeELAGATT,
+  },
   {
     id: "ela-blue-puck-t",
-    name: "ELA Blue Puck T",
+    name: "ELA Blue PUCK T",
     manufacturer: "ELA Innovation",
-    model: "Blue Puck T",
+    model: "Blue PUCK T / T EN12830",
     icon: "radio",
-    // UUID serwisu do filtrowania przy skanowaniu
-    serviceUuid: ELA_SERVICE_UUID,
+    serviceUuid: ELA_ENVIRONMENTAL_SERVICE_UUID,
     characteristicUuid: ELA_TEMP_UUID,
+    manufacturerId: COMPANY_IDS.ELA,
     supportsTemperature: true,
     supportsHumidity:    false,
     supportsPressure:    false,
@@ -175,23 +213,17 @@ export const sensorProfiles: SensorProfile[] = [
     supportsRssi:        true,
     source: "advertisement",
     tempRange: [-40, 85],
-    description: "Zweryfikowany protokół: Service Data UUID 0x2A6E, int16 LE ÷ 100 = °C. Nazwa: 'P T EN xxxxxxx'.",
-    // Dekoder dla Advertisement (serviceData)
-    decodeAdvertisement: decodeELAServiceData,
-    // Dekoder dla GATT (połączenie bezpośrednie — fallback)
+    description: "Temperatura z BLE Service Data UUID 0x2A6E, int16 little-endian ÷ 100.",
+    decodeAdvertisement: decodeELAManufacturerData,
     decodeGatt: decodeELAGATT,
   },
-
-  // ── ELA Blue Puck T — GATT fallback ──────────────────────
-  // Gdy Advertisement nie działa — połącz przez GATT i odczytaj
-  // characteristic 0x2A6E bezpośrednio
   {
-    id: "ela-blue-puck-t-gatt",
-    name: "ELA Blue Puck T (GATT)",
-    manufacturer: "ELA Innovation",
-    model: "Blue Puck T (GATT connect)",
-    icon: "bluetooth",
-    serviceUuid: ELA_SERVICE_UUID,
+    id: "gatt-ess",
+    name: "GATT Environmental Sensing",
+    manufacturer: "Bluetooth SIG",
+    model: "ESS 0x181A",
+    icon: "wind",
+    serviceUuid: ELA_ENVIRONMENTAL_SERVICE_UUID,
     characteristicUuid: ELA_TEMP_UUID,
     supportsTemperature: true,
     supportsHumidity:    false,
@@ -199,33 +231,10 @@ export const sensorProfiles: SensorProfile[] = [
     supportsBattery:     false,
     supportsRssi:        false,
     source: "gatt",
-    tempRange: [-40, 85],
-    description: "ELA Blue Puck T przez GATT connect. Używaj gdy Advertisement Scanning nie jest dostępny.",
+    tempRange: [-273, 327],
+    description: "Fallback GATT dla czujników udostępniających Environmental Sensing Service.",
     decodeGatt: decodeELAGATT,
   },
-
-  // ── ELA Blue Puck RHT ─────────────────────────────────────
-  {
-    id: "ela-blue-puck-rht",
-    name: "ELA Blue Puck RHT",
-    manufacturer: "ELA Innovation",
-    model: "Blue Puck RHT",
-    icon: "droplets",
-    serviceUuid: ELA_SERVICE_UUID,
-    characteristicUuid: ELA_TEMP_UUID,
-    supportsTemperature: true,
-    supportsHumidity:    true,
-    supportsPressure:    false,
-    supportsBattery:     false,
-    supportsRssi:        true,
-    source: "advertisement",
-    tempRange: [-40, 85],
-    description: "ELA Blue Puck z temperaturą i wilgotnością.",
-    decodeAdvertisement: decodeELAServiceData,
-    decodeGatt: decodeELAGATT,
-  },
-
-  // ── RuuviTag ─────────────────────────────────────────────
   {
     id: "ruuvi-tag-raw2",
     name: "RuuviTag",
@@ -240,11 +249,9 @@ export const sensorProfiles: SensorProfile[] = [
     supportsRssi:        true,
     source: "advertisement",
     tempRange: [-40, 85],
-    description: "Multisensor: temp + wilgotność + ciśnienie. Format RAW v2 (Data Format 5).",
+    description: "Multisensor: temp + wilgotność + ciśnienie. Format RAW v2.",
     decodeAdvertisement: decodeRuuvi,
   },
-
-  // ── Govee H5074/H5075 ────────────────────────────────────
   {
     id: "govee-h5074",
     name: "Govee H5074/H5075",
@@ -262,8 +269,6 @@ export const sensorProfiles: SensorProfile[] = [
     description: "Popularny czujnik temp+wilgotność przez Advertisement.",
     decodeAdvertisement: decodeGovee,
   },
-
-  // ── Inkbird IBS-TH2 ──────────────────────────────────────
   {
     id: "inkbird-ibs-th2",
     name: "Inkbird IBS-TH2",
@@ -272,6 +277,7 @@ export const sensorProfiles: SensorProfile[] = [
     icon: "thermometer-snowflake",
     serviceUuid: "0000fff0-0000-1000-8000-00805f9b34fb",
     characteristicUuid: "0000fff1-0000-1000-8000-00805f9b34fb",
+    manufacturerId: COMPANY_IDS.INKBIRD,
     supportsTemperature: true,
     supportsHumidity:    true,
     supportsPressure:    false,
@@ -279,11 +285,9 @@ export const sensorProfiles: SensorProfile[] = [
     supportsRssi:        false,
     source: "gatt",
     tempRange: [-40, 60],
-    description: "Czujnik GATT temp+wilgotność. Popularny do lodówek i szklarni.",
+    description: "Czujnik GATT temp+wilgotność.",
     decodeGatt: decodeInkbird,
   },
-
-  // ── SensorPush HT1 ───────────────────────────────────────
   {
     id: "sensorpush-ht1",
     name: "SensorPush HT1",
@@ -299,11 +303,9 @@ export const sensorProfiles: SensorProfile[] = [
     supportsRssi:        false,
     source: "gatt",
     tempRange: [-40, 60],
-    description: "Profesjonalny czujnik GATT ±0.2°C. Popularny w gastronomii i lab.",
+    description: "Profesjonalny czujnik GATT ±0.2°C.",
     decodeGatt: decodeSensorPush,
   },
-
-  // ── Xiaomi LYWSD03MMC ────────────────────────────────────
   {
     id: "xiaomi-lywsd03mmc",
     name: "Xiaomi LYWSD03MMC",
@@ -319,11 +321,9 @@ export const sensorProfiles: SensorProfile[] = [
     supportsRssi:        false,
     source: "gatt",
     tempRange: [-9.9, 60],
-    description: "Tani Xiaomi z LCD. Wymaga custom firmware ATC.",
+    description: "Xiaomi z LCD. Najlepiej działa z custom firmware ATC.",
     decodeGatt: decodeXiaomi,
   },
-
-  // ── GATT Health Thermometer ──────────────────────────────
   {
     id: "gatt-health-thermometer",
     name: "GATT Health Thermometer",
@@ -342,54 +342,39 @@ export const sensorProfiles: SensorProfile[] = [
     description: "Standardowy profil Bluetooth SIG.",
     decodeGatt: decodeHealthThermometer,
   },
-
-  // ── GATT ESS ─────────────────────────────────────────────
-  {
-    id: "gatt-ess",
-    name: "GATT Environmental Sensing",
-    manufacturer: "Bluetooth SIG",
-    model: "ESS 0x181A",
-    icon: "wind",
-    serviceUuid: ELA_SERVICE_UUID,
-    characteristicUuid: ELA_TEMP_UUID,
-    supportsTemperature: true,
-    supportsHumidity:    false,
-    supportsPressure:    false,
-    supportsBattery:     false,
-    supportsRssi:        false,
-    source: "gatt",
-    tempRange: [-273, 327],
-    description: "Environmental Sensing Service (0x181A) z characteristic Temperature (0x2A6E).",
-    decodeGatt: (d) => ({ temperature: d.byteLength >= 2 ? Math.round(d.getInt16(0, true) / 100 * 100) / 100 : undefined }),
-  },
 ];
 
-// ── Helpers ──────────────────────────────────────────────────
 export const getProfile = (id?: string) => sensorProfiles.find((p) => p.id === id);
 export const getProfilesBySource = (s: "gatt" | "advertisement") => sensorProfiles.filter((p) => p.source === s);
 
-export const ALL_COMPANY_IDS = [COMPANY_IDS.RUUVI, COMPANY_IDS.GOVEE, COMPANY_IDS.INKBIRD];
+export const ALL_COMPANY_IDS = [COMPANY_IDS.ELA, COMPANY_IDS.RUUVI, COMPANY_IDS.GOVEE, COMPANY_IDS.INKBIRD];
 
-/** Auto-detect profilu po nazwie BLE */
 export const detectProfileByName = (name?: string | null): string | null => {
   if (!name) return null;
-  const n = name.toLowerCase();
-  // ELA Blue Puck T — nazwa "P T EN xxxxxxx" lub "BPUCK_T_..."
-  if (n.startsWith("p t en") || n.startsWith("bpuck_t") || n.includes("blue puck t"))  return "ela-blue-puck-t";
-  if (n.startsWith("bpuck_rht") || n.includes("blue puck rht"))                         return "ela-blue-puck-rht";
-  if (n.startsWith("ruuvi")   || n.includes("ruuvitag"))                                return "ruuvi-tag-raw2";
-  if (n.startsWith("govee")   || n.startsWith("gvh"))                                   return "govee-h5074";
-  if (n.includes("ibs-th")    || n.startsWith("inkbird"))                               return "inkbird-ibs-th2";
-  if (n.includes("lywsd03")   || n.includes("mi temp"))                                 return "xiaomi-lywsd03mmc";
-  if (n.includes("sensorpush"))                                                          return "sensorpush-ht1";
+  const n = name.trim().toLowerCase();
+  if (n.startsWith("p rht") || n.startsWith("bpuck_rht") || n.includes("rht") || n.includes("blue puck rht")) return "ela-blue-puck-rht";
+  if (n.startsWith("p t") || n.startsWith("puck t") || n.startsWith("bpuck_t") || n.includes("blue puck t")) return "ela-blue-puck-t";
+  if (n.startsWith("ruuvi")   || n.includes("ruuvitag"))  return "ruuvi-tag-raw2";
+  if (n.startsWith("govee")   || n.startsWith("gvh"))     return "govee-h5074";
+  if (n.includes("ibs-th")    || n.startsWith("inkbird")) return "inkbird-ibs-th2";
+  if (n.includes("lywsd03")   || n.includes("mi temp"))   return "xiaomi-lywsd03mmc";
+  if (n.includes("sensorpush"))                            return "sensorpush-ht1";
   return null;
 };
 
-/** Auto-detect po Company ID */
 export const detectProfileByCompanyId = (id: number): string | null => {
+  if (id === COMPANY_IDS.ELA)     return "ela-blue-puck-rht";
   if (id === COMPANY_IDS.RUUVI)   return "ruuvi-tag-raw2";
   if (id === COMPANY_IDS.GOVEE)   return "govee-h5074";
+  if (id === COMPANY_IDS.INKBIRD) return "inkbird-ibs-th2";
   return null;
 };
 
-export { decodeELAServiceDataWithUUID };
+export const decodeELAServiceFrame = (uuid: string, data: DataView): DecodedData => {
+  const u = uuid.toLowerCase();
+  if (u.includes("2a6e")) return decodeELAServiceData(data);
+  if (u.includes("2a6f")) return decodeELARhtHumidityServiceData(data);
+  return {};
+};
+
+export const decodeELAManufacturerFrame = decodeELAManufacturerData;

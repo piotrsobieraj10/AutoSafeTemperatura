@@ -1,3 +1,6 @@
-<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="28" fill="#070706"/>
+  <path d="M64 14 102 28v29c0 27-17 48-38 57-21-9-38-30-38-57V28l38-14Z" fill="none" stroke="#c9a451" stroke-width="7"/>
+  <path d="M44 66 58 80l29-35" fill="none" stroke="#f4d98c" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="64" y="108" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="900" fill="#c9a451">AS</text>
 </svg>

@@ -1,14 +1,13 @@
-// demoService.ts v2
 import type { Sensor } from "@/types/sensor";
-import { addMeasurement, getSensors, upsertSensor } from "./storageService";
+import { addMeasurement, getMeasurements, getSensors, saveSensors, upsertSensor, K, notifyStorageChanged } from "./storageService";
 
 const DEMO_SENSORS: Omit<Sensor, "id" | "deviceId" | "status" | "isDemo">[] = [
-  { bluetoothName: "BPUCK_T_000001", roomName: "Salon",     profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 87, minTempAlert: 15, maxTempAlert: 28 },
-  { bluetoothName: "BPUCK_T_000002", roomName: "Sypialnia", profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 94, minTempAlert: 16, maxTempAlert: 24 },
-  { bluetoothName: "BPUCK_T_000003", roomName: "Garaż",     profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 62, minTempAlert: 2,  maxTempAlert: 35 },
-  { bluetoothName: "BPUCK_RHT_0001", roomName: "Łazienka",  profileId: "ela-blue-puck-rht", source: "ela-advertisement", batteryLevel: 78, minHumidityAlert: 40, maxHumidityAlert: 70 },
-  { bluetoothName: "RuuviTag_A1B2",  roomName: "Piwnica",   profileId: "ruuvi-tag-raw2",    source: "ela-advertisement", batteryLevel: 91 },
-  { bluetoothName: "GVH5074_FF11",   roomName: "Ogród",     profileId: "govee-h5074",       source: "ela-advertisement", batteryLevel: 45 },
+  { bluetoothName: "P T EN 000001",   roomName: "Salon",     profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 87, minTempAlert: 15, maxTempAlert: 28 },
+  { bluetoothName: "P T EN 000002",   roomName: "Sypialnia", profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 94, minTempAlert: 16, maxTempAlert: 24 },
+  { bluetoothName: "P T EN 000003",   roomName: "Garaż",     profileId: "ela-blue-puck-t",   source: "ela-advertisement", batteryLevel: 62, minTempAlert: 2,  maxTempAlert: 35 },
+  { bluetoothName: "P RHT 000004",    roomName: "Łazienka",  profileId: "ela-blue-puck-rht", source: "ela-advertisement", batteryLevel: 78, minHumidityAlert: 40, maxHumidityAlert: 70 },
+  { bluetoothName: "RuuviTag_A1B2",   roomName: "Piwnica",   profileId: "ruuvi-tag-raw2",    source: "ruuvi", batteryLevel: 91 },
+  { bluetoothName: "GVH5074_FF11",    roomName: "Ogród",     profileId: "govee-h5074",       source: "govee", batteryLevel: 45 },
 ];
 
 const BASE_TEMPS: Record<string, number> = {
@@ -31,8 +30,10 @@ export const ensureDemoSensors = () => {
 };
 
 export const removeDemoSensors = () => {
-  const kept = getSensors().filter((s) => !s.isDemo);
-  localStorage.setItem("thermo.v2.sensors", JSON.stringify(kept));
+  const demoIds = new Set(getSensors().filter((s) => s.isDemo).map((s) => s.id));
+  saveSensors(getSensors().filter((s) => !s.isDemo));
+  localStorage.setItem(K.MEASUREMENTS, JSON.stringify(getMeasurements().filter((m) => !demoIds.has(m.sensorId))));
+  notifyStorageChanged();
 };
 
 let demoInterval: ReturnType<typeof setInterval> | null = null;
@@ -53,7 +54,7 @@ export const startDemoLoop = (onUpdate: () => void) => {
       const rssi = -60 + Math.round((Math.random() - 0.5) * 20);
       const now = new Date().toISOString();
       upsertSensor({ ...s, lastTemperature: temp, lastHumidity: hum, lastPressure: pres, lastRssi: rssi, lastReadAt: now, status: "connected" });
-      addMeasurement({ id: `${s.id}-${Date.now()}`, sensorId: s.id, roomName: s.roomName, temperature: temp, humidity: hum, pressure: pres, rssi, batteryLevel: s.batteryLevel, createdAt: now });
+      addMeasurement({ id: `${s.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`, sensorId: s.id, roomName: s.roomName, temperature: temp, humidity: hum, pressure: pres, rssi, batteryLevel: s.batteryLevel, createdAt: now });
     });
     onUpdate();
   };
@@ -63,5 +64,8 @@ export const startDemoLoop = (onUpdate: () => void) => {
 };
 
 export const stopDemoLoop = () => {
-  if (demoInterval) { clearInterval(demoInterval); demoInterval = null; }
+  if (demoInterval) {
+    clearInterval(demoInterval);
+    demoInterval = null;
+  }
 };

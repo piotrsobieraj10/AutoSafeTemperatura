@@ -1,1 +1,2 @@
 - [ELA Blue Puck T integration](ela-ble-integration.md) — AppSettings moved to types/sensor.ts; storageService re-exports it; storage keys bumped to v2.
+- [v5 patch conventions](v5-patch-conventions.md) — recurring TS fixes for each patch; themeService added; storageService has migrateLegacyStorage + CSV/backup exports; no post-patch TS errors.
