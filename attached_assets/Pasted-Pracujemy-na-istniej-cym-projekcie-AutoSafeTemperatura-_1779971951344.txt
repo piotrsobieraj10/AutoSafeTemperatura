@@ -1,0 +1,123 @@
+Pracujemy na istniejącym projekcie AutoSafeTemperatura.
+
+Wgrałem patch:
+AutoSafe_Temperatura_v6_native_ble_patch.zip
+
+Cel:
+Zastosować patch AutoSafe_Temperatura_v6 jako natywną aplikację Android APK z natywnym BLE telefonu, bez Chrome/Web Bluetooth jako głównego sposobu odczytu.
+
+WAŻNE:
+- Nie przebudowuj projektu od zera.
+- Nie kasuj istniejącej aplikacji.
+- Nie usuwaj PWA/web — ma zostać jako zapas.
+- Nie cofaj wyglądu premium AutoSafe.
+- Nie usuwaj złotego logo AutoSafe.
+- Nie zmieniaj repozytorium GitHub.
+- Nie rób force push.
+- Nie rób commit ani push bez mojej decyzji.
+- Nie usuwaj dotychczasowego Android/Capacitor, jeśli już istnieje.
+- Nie psuj działających dekoderów ELA Blue PUCK.
+
+Najpierw zrób punkt bezpieczeństwa:
+1. Uruchom:
+   git status
+
+2. Utwórz backup branch:
+   git branch backup-przed-v6-native-ble
+
+3. Jeśli są niezapisane zmiany, pokaż je i nie nadpisuj bez decyzji.
+
+Zadanie:
+1. Rozpakuj AutoSafe_Temperatura_v6_native_ble_patch.zip.
+2. Zastosuj patch do aktualnego projektu, nadpisując pliki z paczki.
+3. Zachowaj aktualny wygląd aplikacji:
+   - premium AutoSafe,
+   - złote logo,
+   - dashboard,
+   - historia,
+   - eksport CSV,
+   - backup/import JSON,
+   - ustawienia,
+   - alerty,
+   - karty czujników.
+
+Wymagania techniczne:
+1. Wersja w UI ma być:
+   AutoSafe_Temperatura_v6
+
+2. Android APK ma korzystać z natywnego BLE telefonu przez Capacitor.
+   Główny odczyt w APK nie może zależeć od Chrome CONNECT / Web Bluetooth.
+
+3. AndroidManifest.xml ma mieć uprawnienia:
+   - BLUETOOTH_SCAN
+   - BLUETOOTH_CONNECT
+   - ACCESS_FINE_LOCATION tylko jeśli wymagane przez Androida / kompatybilność
+
+4. Skanowanie ma wykrywać ELA Blue PUCK T/RHT po nazwach:
+   - P T EN
+   - P T
+   - P RHT
+   - ELA
+   - PUCK
+
+5. Zachowaj dekodery:
+   - Service Data UUID 0x2A6E = temperatura int16LE / 100
+   - Service Data UUID 0x2A6F = wilgotność uint16LE / 100
+   - Manufacturer Data companyId 0x0757 = bateria mV
+
+6. Nie kasuj wcześniejszej temperatury, wilgotności ani baterii, gdy kolejna ramka BLE zawiera tylko jedną wartość.
+   Przykład:
+   - jeśli przyszła tylko temperatura, bateria ma zostać z poprzedniego odczytu,
+   - jeśli przyszła tylko bateria, temperatura ma zostać z poprzedniego odczytu,
+   - jeśli przyszła wilgotność, profil może przełączyć się na RHT.
+
+7. Dodaj/utrzymaj diagnostykę BLE:
+   - tryb aplikacji APK/PWA,
+   - Bluetooth włączony/wyłączony,
+   - uprawnienia nadane/brak,
+   - liczba odebranych ramek,
+   - ostatni czujnik,
+   - RSSI,
+   - ostatni odczyt,
+   - ostatni błąd BLE.
+
+8. Przyciski mają zostać:
+   - Szybki odczyt 30 s,
+   - Monitoruj wszystkie / Odśwież wszystkie czujniki,
+   - Zatrzymaj monitoring.
+
+9. Zabezpiecz aplikację przed crashem:
+   - BLE nie może startować automatycznie po uruchomieniu aplikacji,
+   - skanowanie startuje tylko po kliknięciu użytkownika,
+   - nie uruchamiaj kilku skanów jednocześnie,
+   - native plugin ma obsługiwać błędy przez try/catch,
+   - brak uprawnień lub wyłączony Bluetooth ma pokazać komunikat, a nie crashować APK,
+   - ScanRecord / device / manufacturerData / serviceData muszą mieć null-checki.
+
+Po zastosowaniu patcha uruchom:
+
+cd ~/workspace
+pnpm --filter @workspace/autosafe run build
+
+Następnie:
+
+cd artifacts/autosafe
+npx cap sync android
+
+Jeśli wystąpią błędy TypeScript/React/Capacitor/Android:
+- napraw je bez zmiany założeń,
+- nie usuwaj funkcji,
+- popraw typy/importy/logikę,
+- nie zastępuj aplikacji prostszą wersją.
+
+Na końcu podaj:
+- które pliki zmieniłeś,
+- czy build web przeszedł,
+- czy cap sync android przeszedł,
+- czy wersja UI to AutoSafe_Temperatura_v6,
+- czy natywne BLE Android jest aktywne,
+- czy dekodery 0x2A6E / 0x2A6F / 0x0757 pozostały,
+- czy PWA/web zostało jako zapas,
+- wynik git status.
+
+Nie commituj i nie pushuj bez mojej decyzji.

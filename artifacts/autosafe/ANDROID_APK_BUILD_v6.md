@@ -13,7 +13,7 @@ Ten patch przygotowuje aplikację **AutoSafe Temperatura** jako normalną aplika
   - `0x2A6E` temperatura `int16LE / 100`
   - `0x2A6F` wilgotność `uint16LE / 100`
   - `0x0757` bateria mV z ostatnich 2 bajtów Manufacturer Data
-- wersję UI: `AutoSafe_Temperatura_v6_Android_APK`
+- wersję UI: `AutoSafe_Temperatura_v6`
 
 ## Jak zastosować w Replit
 

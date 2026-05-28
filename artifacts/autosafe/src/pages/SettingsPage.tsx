@@ -1,4 +1,4 @@
-// pages/SettingsPage.tsx v5.6.1 — ustawienia, eksporty, diagnostyka i PWA
+// pages/SettingsPage.tsx v6 — ustawienia, eksporty, diagnostyka i natywne BLE Android
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -12,6 +12,7 @@ import { clearAlerts, clearAllMeasurements, clearLocalAppData, createBackupJson,
 import { ensureDemoSensors, removeDemoSensors, startDemoLoop, stopDemoLoop } from "@/services/demoService";
 import { isAdvertisementScanSupported, isBluetoothAvailable, isLEScanSupported } from "@/services/bluetoothService";
 import { sensorProfiles } from "@/services/sensorProfiles";
+import { getNativeBleDiagnostics, type NativeBleDiagnostics } from "@/services/nativeBleService";
 import { APP_VERSION } from "@/config/app";
 import { toast } from "sonner";
 import { BrandMark } from "@/components/BrandMark";
@@ -21,13 +22,21 @@ export function SettingsPage() {
   const [btOk, setBtOk] = useState<boolean | null>(null);
   const [advOk, setAdvOk] = useState(false);
   const [leOk, setLeOk] = useState(false);
+  const [nativeDiag, setNativeDiag] = useState<NativeBleDiagnostics | null>(null);
   const [msCount, setMsCount] = useState(0);
 
   useEffect(() => {
-    isBluetoothAvailable().then(setBtOk);
-    setAdvOk(isAdvertisementScanSupported());
-    setLeOk(isLEScanSupported());
-    setMsCount(getMeasurements().length);
+    let active = true;
+    const refreshDiagnostics = () => {
+      isBluetoothAvailable().then((v) => active && setBtOk(v)).catch(() => active && setBtOk(false));
+      setAdvOk(isAdvertisementScanSupported());
+      setLeOk(isLEScanSupported());
+      setMsCount(getMeasurements().length);
+      getNativeBleDiagnostics().then((diag) => { if (active) setNativeDiag(diag); }).catch(() => { if (active) setNativeDiag(null); });
+    };
+    refreshDiagnostics();
+    const id = window.setInterval(refreshDiagnostics, 2500);
+    return () => { active = false; window.clearInterval(id); };
   }, []);
 
   const update = (patch: Partial<AppSettings>) => {
@@ -104,11 +113,29 @@ export function SettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><Bluetooth className="h-5 w-5" />Status Bluetooth</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          <StatusRow label="Web Bluetooth API" ok={btOk ?? false} pending={btOk === null} />
-          <StatusRow label="requestLEScan — skan reklam po nazwie" ok={leOk} hint={!leOk ? "chrome://flags/#enable-experimental-web-platform-features" : undefined} />
-          <StatusRow label="watchAdvertisements — wybrane urządzenie" ok={advOk} hint={!advOk ? "często niedostępne w PWA; requestLEScan jest ważniejszy dla ELA" : undefined} />
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Bluetooth className="h-5 w-5" />Diagnostyka Bluetooth</CardTitle>
+          <CardDescription>W APK odczyt działa natywnie przez Bluetooth telefonu. Web Bluetooth zostaje tylko jako zapas dla PWA.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-2xl border bg-muted/30 p-3 text-sm">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <DiagnosticLine label="Tryb aplikacji" value={nativeDiag?.appMode === "android-apk" ? "Android APK" : "PWA / przeglądarka"} />
+              <DiagnosticLine label="Natywne BLE" value={nativeDiag?.nativeAvailable ? "dostępne" : "niedostępne"} ok={nativeDiag?.nativeAvailable} />
+              <DiagnosticLine label="Bluetooth" value={nativeDiag?.bluetoothEnabled ? "włączony" : "wyłączony / brak dostępu"} ok={nativeDiag?.bluetoothEnabled} />
+              <DiagnosticLine label="Uprawnienia" value={nativeDiag?.permissionsGranted ? "nadane" : "brak / jeszcze nie sprawdzone"} ok={nativeDiag?.permissionsGranted} />
+              <DiagnosticLine label="Skanowanie" value={nativeDiag?.scanning ? "aktywne" : "zatrzymane"} ok={nativeDiag?.scanning} />
+              <DiagnosticLine label="Odebrane ramki" value={`${nativeDiag?.receivedFrames ?? 0}`} />
+              <DiagnosticLine label="Ostatni czujnik" value={nativeDiag?.lastDeviceName || "—"} />
+              <DiagnosticLine label="RSSI" value={nativeDiag?.lastRssi != null ? `${nativeDiag.lastRssi} dBm` : "—"} />
+              <DiagnosticLine label="Ostatni odczyt" value={nativeDiag?.lastReadAt ? new Date(nativeDiag.lastReadAt).toLocaleTimeString("pl-PL") : "—"} />
+              <DiagnosticLine label="Tryb BLE" value={nativeDiag?.mode || "—"} />
+            </div>
+            {nativeDiag?.lastError && <div className="mt-3 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">Ostatni błąd BLE: {nativeDiag.lastError}</div>}
+          </div>
+          <StatusRow label="Web Bluetooth API — zapas dla PWA" ok={btOk ?? false} pending={btOk === null} />
+          <StatusRow label="requestLEScan — zapasowy skan PWA" ok={leOk} hint={!leOk ? "W APK nie jest wymagane. W PWA zależy od Chrome." : undefined} />
+          <StatusRow label="watchAdvertisements — zapas PWA" ok={advOk} hint={!advOk ? "W APK nie jest wymagane, bo działa natywne BLE Android." : undefined} />
         </CardContent>
       </Card>
 
@@ -135,6 +162,15 @@ export function SettingsPage() {
         <AlertTitle className="text-primary">ELA Blue PUCK — ustalony format</AlertTitle>
         <AlertDescription className="mt-1 space-y-1 text-xs"><p>Service Data <code className="rounded bg-background px-1 border font-mono">0x2A6E</code> = temperatura int16LE÷100°C, <code className="rounded bg-background px-1 border font-mono">0x2A6F</code> = wilgotność ÷100%.</p><p>Manufacturer Data <code className="rounded bg-background px-1 border font-mono">0x0757</code> = bateria w mV z ostatnich 2 bajtów. Czujnik nadaje dane w BLE advertising.</p></AlertDescription>
       </Alert>
+    </div>
+  );
+}
+
+function DiagnosticLine({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-background/70 px-3 py-2">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className={`text-right text-xs font-semibold ${ok === true ? "text-green-600 dark:text-green-400" : ok === false ? "text-muted-foreground" : "text-foreground"}`}>{value}</span>
     </div>
   );
 }

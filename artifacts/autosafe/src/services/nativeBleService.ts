@@ -1,5 +1,6 @@
-// services/nativeBleService.ts — AutoSafe_Temperatura_v6 Android APK
-// Natywny skaner BLE dla Androida przez Capacitor. W PWA niczego nie zmienia.
+// services/nativeBleService.ts — AutoSafe_Temperatura_v6
+// Natywny skaner BLE dla Android APK przez Capacitor.
+// PWA zostaje jako zapas: gdy aplikacja nie działa jako Android APK, używany jest Web Bluetooth fallback.
 
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type { DecodedData, Sensor } from "@/types/sensor";
@@ -27,12 +28,42 @@ interface NativeScanOptions {
   namePrefixes?: string[];
 }
 
+interface NativeBleStatus {
+  supported: boolean;
+  bluetoothEnabled: boolean;
+  permissionsGranted?: boolean;
+  scanning: boolean;
+  frameCount?: number;
+  lastDeviceName?: string;
+  lastDeviceAddress?: string;
+  lastRssi?: number;
+  lastReadingAt?: number;
+  lastError?: string;
+  mode?: string;
+}
+
 interface AutosafeBlePlugin {
-  startScan(options?: NativeScanOptions): Promise<{ active: boolean; mode: string }>;
+  startScan(options?: NativeScanOptions): Promise<{ active: boolean; mode: string; alreadyRunning?: boolean }>;
   stopScan(): Promise<{ stopped: boolean }>;
-  getStatus(): Promise<{ supported: boolean; bluetoothEnabled: boolean; scanning: boolean }>;
+  getStatus(): Promise<NativeBleStatus>;
   addListener(eventName: "elaAdvertisement", listenerFunc: (event: NativeElaAdvertisement) => void): Promise<PluginListenerHandle>;
-  addListener(eventName: "elaScanStopped", listenerFunc: (event: { reason?: string }) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: "elaScanStopped", listenerFunc: (event: { reason?: string; message?: string }) => void): Promise<PluginListenerHandle>;
+}
+
+export interface NativeBleDiagnostics {
+  appMode: "android-apk" | "pwa";
+  nativeAvailable: boolean;
+  supported: boolean;
+  bluetoothEnabled: boolean;
+  permissionsGranted: boolean;
+  scanning: boolean;
+  receivedFrames: number;
+  lastDeviceName?: string;
+  lastDeviceAddress?: string;
+  lastRssi?: number;
+  lastReadAt?: string;
+  lastError?: string;
+  mode: string;
 }
 
 const AutosafeBle = registerPlugin<AutosafeBlePlugin>("AutosafeBle");
@@ -40,8 +71,19 @@ const handles = new Map<string, PluginListenerHandle>();
 let sharedScanRunning = false;
 let lastStartAt = 0;
 
-const NAME_PREFIXES = ["P T", "P T EN", "P RHT", "P RHT EN", "BPUCK", "ELA"];
+const NAME_PREFIXES = ["P T", "P T EN", "P RHT", "P RHT EN", "BPUCK", "ELA", "PUCK"];
 const SCAN_SECONDS = 75;
+
+const localDiagnostics: NativeBleDiagnostics = {
+  appMode: "pwa",
+  nativeAvailable: false,
+  supported: false,
+  bluetoothEnabled: false,
+  permissionsGranted: false,
+  scanning: false,
+  receivedFrames: 0,
+  mode: "web-fallback",
+};
 
 export const isNativeBleAvailable = (): boolean => {
   try {
@@ -69,7 +111,25 @@ const rawMapToText = (input?: Record<string, string>): string | undefined => {
   return rows.length ? rows.map(([k, v]) => `${k}=${v}`).join(" | ") : undefined;
 };
 
+const updateLocalDiagnosticsFromEvent = (event: NativeElaAdvertisement) => {
+  localDiagnostics.appMode = isNativeBleAvailable() ? "android-apk" : "pwa";
+  localDiagnostics.nativeAvailable = isNativeBleAvailable();
+  localDiagnostics.supported = true;
+  localDiagnostics.bluetoothEnabled = true;
+  localDiagnostics.permissionsGranted = true;
+  localDiagnostics.scanning = sharedScanRunning;
+  localDiagnostics.receivedFrames += 1;
+  localDiagnostics.lastDeviceName = event.name ?? event.deviceId ?? event.address ?? "ELA Blue PUCK";
+  localDiagnostics.lastDeviceAddress = event.address ?? event.deviceId;
+  localDiagnostics.lastRssi = event.rssi;
+  localDiagnostics.lastReadAt = new Date(event.timestamp ?? Date.now()).toISOString();
+  localDiagnostics.lastError = undefined;
+  localDiagnostics.mode = "native-android-scanrecord";
+};
+
 const nativeEventToResult = (event: NativeElaAdvertisement, hintProfileId?: string | null) => {
+  updateLocalDiagnosticsFromEvent(event);
+
   const name = event.name || event.deviceId || "ELA Blue PUCK";
   const device: BTDevice = {
     id: event.deviceId || event.address || name,
@@ -105,19 +165,51 @@ const nativeEventToResult = (event: NativeElaAdvertisement, hintProfileId?: stri
   return { device, detectedProfileId: profileId, data };
 };
 
-const ensureNativeScan = async (onError?: (e: Error) => void): Promise<boolean> => {
+const ensureNativeScan = async (onError?: (e: Error) => void, scanSeconds = SCAN_SECONDS): Promise<boolean> => {
   if (!isNativeBleAvailable()) return false;
   try {
     const now = Date.now();
-    if (sharedScanRunning && now - lastStartAt < SCAN_SECONDS * 1000) return true;
-    const result = await AutosafeBle.startScan({ scanSeconds: SCAN_SECONDS, namePrefixes: NAME_PREFIXES });
+    if (sharedScanRunning && now - lastStartAt < scanSeconds * 1000) return true;
+    const result = await AutosafeBle.startScan({ scanSeconds, namePrefixes: NAME_PREFIXES });
     sharedScanRunning = result.active;
     lastStartAt = now;
+    localDiagnostics.scanning = result.active;
+    localDiagnostics.mode = result.mode || "native-android-scanrecord";
     return result.active;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    localDiagnostics.lastError = msg;
+    localDiagnostics.scanning = false;
     onError?.(new Error(`Android BLE: nie udało się uruchomić natywnego skanowania: ${msg}`));
     return false;
+  }
+};
+
+export const getNativeBleDiagnostics = async (): Promise<NativeBleDiagnostics> => {
+  const appMode = isNativeBleAvailable() ? "android-apk" : "pwa";
+  if (!isNativeBleAvailable()) {
+    return { ...localDiagnostics, appMode, nativeAvailable: false, mode: "pwa-web-bluetooth-fallback" };
+  }
+  try {
+    const status = await AutosafeBle.getStatus();
+    return {
+      appMode,
+      nativeAvailable: true,
+      supported: Boolean(status.supported),
+      bluetoothEnabled: Boolean(status.bluetoothEnabled),
+      permissionsGranted: Boolean(status.permissionsGranted),
+      scanning: Boolean(status.scanning),
+      receivedFrames: Number(status.frameCount ?? localDiagnostics.receivedFrames ?? 0),
+      lastDeviceName: status.lastDeviceName || localDiagnostics.lastDeviceName,
+      lastDeviceAddress: status.lastDeviceAddress || localDiagnostics.lastDeviceAddress,
+      lastRssi: status.lastRssi ?? localDiagnostics.lastRssi,
+      lastReadAt: status.lastReadingAt ? new Date(status.lastReadingAt).toISOString() : localDiagnostics.lastReadAt,
+      lastError: status.lastError || localDiagnostics.lastError,
+      mode: status.mode || "native-android-scanrecord",
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ...localDiagnostics, appMode, nativeAvailable: true, supported: false, lastError: msg, mode: "native-plugin-error" };
   }
 };
 
@@ -127,6 +219,7 @@ export const stopAllNativeBleActivity = async (): Promise<void> => {
   }
   handles.clear();
   sharedScanRunning = false;
+  localDiagnostics.scanning = false;
   try { await AutosafeBle.stopScan(); } catch { /* ignore */ }
 };
 
@@ -177,7 +270,7 @@ export const scanForDeviceNative = async (
     try {
       handle = await AutosafeBle.addListener("elaAdvertisement", (event) => {
         const name = event.name ?? "";
-        const isEla = /^(P\s*T|P\s*RHT|BPUCK|ELA)/i.test(name);
+        const isEla = /^(P\s*T|P\s*RHT|BPUCK|ELA|PUCK)/i.test(name) || Boolean(event.serviceData?.["00002a6e-0000-1000-8000-00805f9b34fb"]);
         if (mode === "ela" && !isEla) return;
         const result = nativeEventToResult(event);
         onData(result);
@@ -187,7 +280,7 @@ export const scanForDeviceNative = async (
           resolve(result.device);
         }
       });
-      const ok = await ensureNativeScan(onError);
+      const ok = await ensureNativeScan(onError, 45);
       if (!ok && !resolved) {
         resolved = true;
         window.clearTimeout(timeout);
@@ -196,6 +289,7 @@ export const scanForDeviceNative = async (
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      localDiagnostics.lastError = msg;
       if (!resolved) {
         resolved = true;
         window.clearTimeout(timeout);

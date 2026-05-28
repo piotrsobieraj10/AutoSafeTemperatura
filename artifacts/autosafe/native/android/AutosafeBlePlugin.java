@@ -55,6 +55,12 @@ public class AutosafeBlePlugin extends Plugin {
     private final Map<String, String> lastPayloadByDevice = new HashMap<>();
     private Runnable stopRunnable;
     private boolean scanning = false;
+    private long frameCount = 0L;
+    private String lastDeviceName = "";
+    private String lastDeviceAddress = "";
+    private int lastRssi = 0;
+    private long lastReadingAt = 0L;
+    private String lastError = "";
 
     @PluginMethod
     public void getStatus(PluginCall call) {
@@ -64,8 +70,17 @@ public class AutosafeBlePlugin extends Plugin {
             ret.put("supported", adapter != null);
             ret.put("bluetoothEnabled", adapter != null && adapter.isEnabled());
             ret.put("scanning", scanning);
+            ret.put("permissionsGranted", hasBlePermissions());
+            ret.put("frameCount", frameCount);
+            ret.put("lastDeviceName", lastDeviceName);
+            ret.put("lastDeviceAddress", lastDeviceAddress);
+            ret.put("lastRssi", lastRssi);
+            ret.put("lastReadingAt", lastReadingAt);
+            ret.put("lastError", lastError);
+            ret.put("mode", "native-android-scanrecord");
             call.resolve(ret);
         } catch (Exception e) {
+            lastError = "status_error: " + e.getMessage();
             call.reject("Nie udało się sprawdzić statusu BLE: " + e.getMessage());
         }
     }
@@ -105,15 +120,18 @@ public class AutosafeBlePlugin extends Plugin {
         try {
             BluetoothAdapter adapter = getAdapter();
             if (adapter == null) {
+                lastError = "Bluetooth LE not supported";
                 call.reject("Ten telefon nie obsługuje Bluetooth LE.");
                 return;
             }
             if (!adapter.isEnabled()) {
+                lastError = "Bluetooth disabled";
                 call.reject("Bluetooth jest wyłączony. Włącz Bluetooth i spróbuj ponownie.");
                 return;
             }
             scanner = adapter.getBluetoothLeScanner();
             if (scanner == null) {
+                lastError = "BluetoothLeScanner is null";
                 call.reject("Nie udało się uruchomić skanera BLE.");
                 return;
             }
@@ -132,6 +150,7 @@ public class AutosafeBlePlugin extends Plugin {
             final int scanSeconds = Math.min(300, Math.max(10, call.getInt("scanSeconds", 75)));
             lastEmitAtByDevice.clear();
             lastPayloadByDevice.clear();
+            lastError = "";
 
             scanCallback = new ScanCallback() {
                 @Override
@@ -149,6 +168,7 @@ public class AutosafeBlePlugin extends Plugin {
                 public void onScanFailed(int errorCode) {
                     scanning = false;
                     JSObject error = new JSObject();
+                    lastError = "scan_failed_" + errorCode;
                     error.put("reason", "scan_failed_" + errorCode);
                     safeNotify("elaScanStopped", error);
                 }
@@ -179,9 +199,11 @@ public class AutosafeBlePlugin extends Plugin {
             call.resolve(ret);
         } catch (SecurityException e) {
             scanning = false;
+            lastError = "permission_error: " + e.getMessage();
             call.reject("Brak uprawnień do skanowania BLE: " + e.getMessage());
         } catch (Exception e) {
             scanning = false;
+            lastError = "start_scan_error: " + e.getMessage();
             call.reject("Nie udało się uruchomić skanowania BLE: " + e.getMessage());
         }
     }
@@ -221,6 +243,7 @@ public class AutosafeBlePlugin extends Plugin {
             handleScanResult(result);
         } catch (Exception e) {
             JSObject error = new JSObject();
+            lastError = "scan_result_error: " + e.getMessage();
             error.put("reason", "scan_result_error");
             error.put("message", e.getMessage());
             safeNotify("elaScanStopped", error);
@@ -293,6 +316,12 @@ public class AutosafeBlePlugin extends Plugin {
             }
         }
         event.put("manufacturerData", manufacturerJson);
+
+        frameCount++;
+        lastDeviceName = name != null ? name : "ELA Blue PUCK";
+        lastDeviceAddress = address != null ? address : "";
+        lastRssi = result.getRssi();
+        lastReadingAt = System.currentTimeMillis();
 
         safeNotify("elaAdvertisement", event);
     }
