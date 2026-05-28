@@ -48,9 +48,13 @@ function decodeElaTemperatureData(data: DataView, offset = 0): DecodedData {
 }
 
 function decodeElaHumidityData(data: DataView, offset = 0): DecodedData {
-  if (data.byteLength < offset + 2) return {};
-  const rawHumidity = data.getUint16(offset, true);
-  const humidity = rawHumidity / 100;
+  const available = data.byteLength - offset;
+  if (available <= 0) return {};
+
+  // ELA Blue PUCK RHT w realnych ramkach z nRF Connect nadaje 0x2A6F jako 1 bajt procentów:
+  // 6F 2A 33 => 51%, 6F 2A 32 => 50%.
+  // Fallback 2-bajtowy zostaje dla innych wersji firmware.
+  const humidity = available === 1 ? data.getUint8(offset) : data.getUint16(offset, true) / 100;
   if (humidity < 0 || humidity > 100) return {};
   return { humidity: round2(humidity) };
 }

@@ -55,12 +55,6 @@ public class AutosafeBlePlugin extends Plugin {
     private final Map<String, String> lastPayloadByDevice = new HashMap<>();
     private Runnable stopRunnable;
     private boolean scanning = false;
-    private long frameCount = 0L;
-    private String lastDeviceName = "";
-    private String lastDeviceAddress = "";
-    private int lastRssi = 0;
-    private long lastReadingAt = 0L;
-    private String lastError = "";
 
     @PluginMethod
     public void getStatus(PluginCall call) {
@@ -69,19 +63,11 @@ public class AutosafeBlePlugin extends Plugin {
             BluetoothAdapter adapter = getAdapter();
             ret.put("supported", adapter != null);
             ret.put("bluetoothEnabled", adapter != null && adapter.isEnabled());
+            ret.put("scannerAvailable", adapter != null && adapter.isEnabled() && adapter.getBluetoothLeScanner() != null);
             ret.put("scanning", scanning);
-            ret.put("permissionsGranted", hasBlePermissions());
-            ret.put("frameCount", frameCount);
-            ret.put("lastDeviceName", lastDeviceName);
-            ret.put("lastDeviceAddress", lastDeviceAddress);
-            ret.put("lastRssi", lastRssi);
-            ret.put("lastReadingAt", lastReadingAt);
-            ret.put("lastError", lastError);
-            ret.put("mode", "native-android-scanrecord");
             call.resolve(ret);
         } catch (Exception e) {
-            lastError = "status_error: " + e.getMessage();
-            call.reject("Nie udało się sprawdzić statusu BLE: " + e.getMessage());
+            rejectWithCode(call, "BLE_STATUS_FAILED", "Nie udało się sprawdzić statusu Bluetooth: " + safeMessage(e));
         }
     }
 
@@ -97,8 +83,10 @@ public class AutosafeBlePlugin extends Plugin {
                 return;
             }
             startScanInternal(call);
+        } catch (SecurityException e) {
+            rejectWithCode(call, "BLE_PERMISSION_DENIED", "Brak uprawnień Bluetooth. Nadaj aplikacji uprawnienie Urządzenia w pobliżu.");
         } catch (Exception e) {
-            call.reject("Błąd startu BLE: " + e.getMessage());
+            rejectWithCode(call, "BLE_SCAN_START_FAILED", "Nie udało się uruchomić skanowania BLE: " + safeMessage(e));
         }
     }
 
@@ -106,106 +94,96 @@ public class AutosafeBlePlugin extends Plugin {
     private void permissionCallback(PluginCall call) {
         try {
             if (!hasBlePermissions()) {
-                call.reject("Brak uprawnień Bluetooth. Nadaj zgodę na Urządzenia w pobliżu / Bluetooth.");
+                rejectWithCode(call, "BLE_PERMISSION_DENIED", "Brak uprawnień Bluetooth. Nadaj aplikacji uprawnienie Urządzenia w pobliżu.");
                 return;
             }
             startScanInternal(call);
         } catch (Exception e) {
-            call.reject("Błąd uprawnień BLE: " + e.getMessage());
+            rejectWithCode(call, "BLE_PERMISSION_DENIED", "Nie udało się potwierdzić uprawnień Bluetooth: " + safeMessage(e));
         }
     }
 
     @SuppressLint("MissingPermission")
     private void startScanInternal(PluginCall call) {
-        try {
-            BluetoothAdapter adapter = getAdapter();
-            if (adapter == null) {
-                lastError = "Bluetooth LE not supported";
-                call.reject("Ten telefon nie obsługuje Bluetooth LE.");
-                return;
-            }
-            if (!adapter.isEnabled()) {
-                lastError = "Bluetooth disabled";
-                call.reject("Bluetooth jest wyłączony. Włącz Bluetooth i spróbuj ponownie.");
-                return;
-            }
-            scanner = adapter.getBluetoothLeScanner();
-            if (scanner == null) {
-                lastError = "BluetoothLeScanner is null";
-                call.reject("Nie udało się uruchomić skanera BLE.");
-                return;
-            }
+        BluetoothLeScanner activeScanner = getScannerOrReject(call);
+        if (activeScanner == null) return;
 
-            // Nie uruchamiaj kilku skanów jednocześnie po wielokrotnym kliknięciu.
-            if (scanning && scanCallback != null) {
-                JSObject ret = new JSObject();
-                ret.put("active", true);
-                ret.put("mode", "native-android-ble-advertising");
-                ret.put("alreadyRunning", true);
-                call.resolve(ret);
-                return;
-            }
-
-            stopScanInternal(false);
-            final int scanSeconds = Math.min(300, Math.max(10, call.getInt("scanSeconds", 75)));
-            lastEmitAtByDevice.clear();
-            lastPayloadByDevice.clear();
-            lastError = "";
-
-            scanCallback = new ScanCallback() {
-                @Override
-                public void onScanResult(int callbackType, ScanResult result) {
-                    safeHandleScanResult(result);
-                }
-
-                @Override
-                public void onBatchScanResults(List<ScanResult> results) {
-                    if (results == null) return;
-                    for (ScanResult result : results) safeHandleScanResult(result);
-                }
-
-                @Override
-                public void onScanFailed(int errorCode) {
-                    scanning = false;
-                    JSObject error = new JSObject();
-                    lastError = "scan_failed_" + errorCode;
-                    error.put("reason", "scan_failed_" + errorCode);
-                    safeNotify("elaScanStopped", error);
-                }
-            };
-
-            ScanSettings.Builder builder = new ScanSettings.Builder()
-                // LOW_LATENCY potrafił zasypać WebView zdarzeniami i wywołać crash na słabszych telefonach.
-                .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
-                .setReportDelay(0);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                builder
-                    .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-                    .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
-                    .setNumOfMatches(ScanSettings.MATCH_NUM_FEW_ADVERTISEMENT);
-            }
-
-            scanner.startScan(null, builder.build(), scanCallback);
-            scanning = true;
-
-            if (stopRunnable != null) handler.removeCallbacks(stopRunnable);
-            stopRunnable = () -> stopScanInternal(true);
-            handler.postDelayed(stopRunnable, scanSeconds * 1000L);
-
+        // Nie uruchamiaj kilku skanów jednocześnie po wielokrotnym kliknięciu.
+        if (scanning && scanCallback != null) {
             JSObject ret = new JSObject();
             ret.put("active", true);
             ret.put("mode", "native-android-ble-advertising");
-            ret.put("scanSeconds", scanSeconds);
+            ret.put("alreadyRunning", true);
             call.resolve(ret);
+            return;
+        }
+
+        stopScanInternal(false);
+        scanner = activeScanner;
+        final int scanSeconds = Math.min(300, Math.max(10, call.getInt("scanSeconds", 75)));
+        lastEmitAtByDevice.clear();
+        lastPayloadByDevice.clear();
+
+        scanCallback = new ScanCallback() {
+            @Override
+            public void onScanResult(int callbackType, ScanResult result) {
+                safeHandleScanResult(result);
+            }
+
+            @Override
+            public void onBatchScanResults(List<ScanResult> results) {
+                if (results == null) return;
+                for (ScanResult result : results) safeHandleScanResult(result);
+            }
+
+            @Override
+            public void onScanFailed(int errorCode) {
+                scanning = false;
+                JSObject error = bleErrorEvent(errorCode);
+                safeNotify("elaScanStopped", error);
+            }
+        };
+
+        ScanSettings.Builder builder = new ScanSettings.Builder()
+            // LOW_LATENCY potrafił zasypać WebView zdarzeniami i wywołać crash na słabszych telefonach.
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+            .setReportDelay(0);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            builder
+                .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+                .setNumOfMatches(ScanSettings.MATCH_NUM_FEW_ADVERTISEMENT);
+        }
+
+        try {
+            scanner.startScan(null, builder.build(), scanCallback);
+            scanning = true;
         } catch (SecurityException e) {
             scanning = false;
-            lastError = "permission_error: " + e.getMessage();
-            call.reject("Brak uprawnień do skanowania BLE: " + e.getMessage());
+            scanCallback = null;
+            rejectWithCode(call, "BLE_PERMISSION_DENIED", "Brak uprawnień Bluetooth. Nadaj aplikacji uprawnienie Urządzenia w pobliżu.");
+            return;
+        } catch (IllegalStateException e) {
+            scanning = false;
+            scanCallback = null;
+            rejectWithCode(call, "BLE_STATE_ERROR", "Bluetooth jest chwilowo niedostępny. Wyłącz i włącz Bluetooth, a potem spróbuj ponownie.");
+            return;
         } catch (Exception e) {
             scanning = false;
-            lastError = "start_scan_error: " + e.getMessage();
-            call.reject("Nie udało się uruchomić skanowania BLE: " + e.getMessage());
+            scanCallback = null;
+            rejectWithCode(call, "BLE_SCAN_START_FAILED", "Nie udało się uruchomić skanowania BLE: " + safeMessage(e));
+            return;
         }
+
+        if (stopRunnable != null) handler.removeCallbacks(stopRunnable);
+        stopRunnable = () -> stopScanInternal(true);
+        handler.postDelayed(stopRunnable, scanSeconds * 1000L);
+
+        JSObject ret = new JSObject();
+        ret.put("active", true);
+        ret.put("mode", "native-android-ble-advertising");
+        ret.put("scanSeconds", scanSeconds);
+        call.resolve(ret);
     }
 
     @PluginMethod
@@ -243,9 +221,9 @@ public class AutosafeBlePlugin extends Plugin {
             handleScanResult(result);
         } catch (Exception e) {
             JSObject error = new JSObject();
-            lastError = "scan_result_error: " + e.getMessage();
-            error.put("reason", "scan_result_error");
-            error.put("message", e.getMessage());
+            error.put("reason", "BLE_SCAN_RESULT_ERROR");
+            error.put("code", "BLE_SCAN_RESULT_ERROR");
+            error.put("message", "Nie udało się obsłużyć ramki BLE: " + safeMessage(e));
             safeNotify("elaScanStopped", error);
         }
     }
@@ -290,7 +268,7 @@ public class AutosafeBlePlugin extends Plugin {
                     if (temp != null) event.put("temperature", temp);
                 }
                 if (uuid.contains("2a6f")) {
-                    Double humidity = decodeUnsignedInt16LeDiv100(data);
+                    Double humidity = decodeHumidityPercent(data);
                     if (humidity != null && humidity >= 0 && humidity <= 100) event.put("humidity", humidity);
                 }
             }
@@ -317,19 +295,91 @@ public class AutosafeBlePlugin extends Plugin {
         }
         event.put("manufacturerData", manufacturerJson);
 
-        frameCount++;
-        lastDeviceName = name != null ? name : "ELA Blue PUCK";
-        lastDeviceAddress = address != null ? address : "";
-        lastRssi = result.getRssi();
-        lastReadingAt = System.currentTimeMillis();
-
         safeNotify("elaAdvertisement", event);
+    }
+
+    private BluetoothLeScanner getScannerOrReject(PluginCall call) {
+        BluetoothManager manager;
+        try {
+            manager = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
+        } catch (Exception e) {
+            rejectWithCode(call, "BLE_NOT_SUPPORTED", "Nie udało się uzyskać usługi Bluetooth na tym urządzeniu.");
+            return null;
+        }
+        if (manager == null) {
+            rejectWithCode(call, "BLE_NOT_SUPPORTED", "To urządzenie nie udostępnia Bluetooth BLE dla aplikacji.");
+            return null;
+        }
+        BluetoothAdapter adapter = manager.getAdapter();
+        if (adapter == null) {
+            rejectWithCode(call, "BLE_NOT_SUPPORTED", "To urządzenie nie udostępnia Bluetooth BLE dla aplikacji.");
+            return null;
+        }
+        if (!adapter.isEnabled()) {
+            rejectWithCode(call, "BLE_OFF", "Bluetooth jest wyłączony. Włącz Bluetooth i spróbuj ponownie.");
+            return null;
+        }
+        BluetoothLeScanner bleScanner;
+        try {
+            bleScanner = adapter.getBluetoothLeScanner();
+        } catch (SecurityException e) {
+            rejectWithCode(call, "BLE_PERMISSION_DENIED", "Brak uprawnień Bluetooth. Nadaj aplikacji uprawnienie Urządzenia w pobliżu.");
+            return null;
+        } catch (Exception e) {
+            rejectWithCode(call, "BLE_SCANNER_NULL", "Skaner BLE jest niedostępny. Włącz Bluetooth, nadaj uprawnienia aplikacji i spróbuj ponownie.");
+            return null;
+        }
+        if (bleScanner == null) {
+            rejectWithCode(call, "BLE_SCANNER_NULL", "Skaner BLE jest niedostępny. Włącz Bluetooth, nadaj uprawnienia aplikacji i spróbuj ponownie.");
+            return null;
+        }
+        return bleScanner;
     }
 
     private void safeNotify(String eventName, JSObject event) {
         handler.post(() -> {
             try { notifyListeners(eventName, event, true); } catch (Exception ignored) { }
         });
+    }
+
+    private JSObject bleErrorEvent(int errorCode) {
+        JSObject error = new JSObject();
+        String code = mapScanErrorCode(errorCode);
+        error.put("reason", code);
+        error.put("code", code);
+        error.put("androidScanError", errorCode);
+        error.put("message", mapScanErrorMessage(code));
+        return error;
+    }
+
+    private String mapScanErrorCode(int errorCode) {
+        switch (errorCode) {
+            case 1: return "BLE_SCAN_ALREADY_STARTED";
+            case 2: return "BLE_SCAN_REGISTRATION_FAILED";
+            case 3: return "BLE_SCAN_INTERNAL_ERROR";
+            case 4: return "BLE_FEATURE_UNSUPPORTED";
+            case 5: return "BLE_OUT_OF_HARDWARE_RESOURCES";
+            case 6: return "BLE_SCANNING_TOO_FREQUENTLY";
+            default: return "BLE_SCAN_FAILED_" + errorCode;
+        }
+    }
+
+    private String mapScanErrorMessage(String code) {
+        if ("BLE_SCAN_ALREADY_STARTED".equals(code)) return "Skanowanie BLE już działa. Poczekaj chwilę albo zatrzymaj skanowanie.";
+        if ("BLE_SCAN_REGISTRATION_FAILED".equals(code)) return "Android nie zarejestrował skanowania BLE. Zamknij aplikację i uruchom ją ponownie.";
+        if ("BLE_SCAN_INTERNAL_ERROR".equals(code)) return "Wystąpił wewnętrzny błąd Bluetooth Androida. Wyłącz i włącz Bluetooth.";
+        if ("BLE_FEATURE_UNSUPPORTED".equals(code)) return "Ten telefon nie obsługuje wymaganego trybu skanowania BLE.";
+        if ("BLE_OUT_OF_HARDWARE_RESOURCES".equals(code)) return "Telefon ma zajęte zasoby Bluetooth. Zamknij inne aplikacje używające Bluetooth, np. nRF Connect.";
+        if ("BLE_SCANNING_TOO_FREQUENTLY".equals(code)) return "Android zablokował zbyt częste skanowanie. Odczekaj 30–60 sekund i spróbuj ponownie.";
+        return "Nie udało się uruchomić skanowania BLE.";
+    }
+
+    private void rejectWithCode(PluginCall call, String code, String message) {
+        call.reject(code + ": " + message);
+    }
+
+    private String safeMessage(Exception e) {
+        return e != null && e.getMessage() != null ? e.getMessage() : "brak szczegółów";
     }
 
     private boolean shouldEmit(String key, String rawHex) {
@@ -345,8 +395,12 @@ public class AutosafeBlePlugin extends Plugin {
     }
 
     private BluetoothAdapter getAdapter() {
-        BluetoothManager manager = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
-        return manager != null ? manager.getAdapter() : null;
+        try {
+            BluetoothManager manager = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
+            return manager != null ? manager.getAdapter() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private boolean hasBlePermissions() {
@@ -395,10 +449,15 @@ public class AutosafeBlePlugin extends Plugin {
         return (value >= -80 && value <= 120) ? value : null;
     }
 
-    private static Double decodeUnsignedInt16LeDiv100(byte[] data) {
-        if (data == null || data.length < 2) return null;
-        int raw = uint16Le(data[0], data[1]);
-        return Math.round((raw / 100.0) * 100.0) / 100.0;
+    private static Double decodeHumidityPercent(byte[] data) {
+        if (data == null || data.length < 1) return null;
+
+        // ELA Blue PUCK RHT z testowanych ramek nadaje wilgotność jako 1 bajt:
+        // 04 16 6F 2A 33 => 0x33 = 51%.
+        // Zostawiamy fallback uint16LE / 100 dla innych wersji firmware.
+        double value = data.length == 1 ? (double) (data[0] & 0xFF) : uint16Le(data[0], data[1]) / 100.0;
+        value = Math.round(value * 100.0) / 100.0;
+        return (value >= 0 && value <= 100) ? value : null;
     }
 
     private static int uint16Le(byte lo, byte hi) {

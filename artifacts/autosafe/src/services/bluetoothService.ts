@@ -154,10 +154,14 @@ const decodeTempValue = (dv: DataView): number | undefined => {
 };
 
 const decodeHumidityValue = (dv: DataView): number | undefined => {
-  if (dv.byteLength < 2) return undefined;
-  const offset = dv.byteLength >= 4 && dv.getUint16(0, true) === 0x2A6F ? 2 : 0;
-  if (dv.byteLength < offset + 2) return undefined;
-  const humidity = dv.getUint16(offset, true) / 100;
+  const offset = dv.byteLength >= 3 && dv.getUint16(0, true) === 0x2A6F ? 2 : 0;
+  const available = dv.byteLength - offset;
+  if (available <= 0) return undefined;
+
+  // ELA Blue PUCK RHT z testowanych ramek nadaje wilgotność jako 1 bajt:
+  // 04 16 6F 2A 33 => 0x33 = 51%.
+  // Zostawiamy też fallback dla wariantu uint16LE / 100, gdyby inny firmware nadał 2 bajty.
+  const humidity = available === 1 ? dv.getUint8(offset) : dv.getUint16(offset, true) / 100;
   return humidity >= 0 && humidity <= 100 ? Math.round(humidity * 100) / 100 : undefined;
 };
 

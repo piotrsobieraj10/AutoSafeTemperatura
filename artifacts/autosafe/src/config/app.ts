@@ -1,6 +1,6 @@
 export const APP_NAME = "AutoSafe Temperatura";
-export const APP_VERSION = "AutoSafe_Temperatura_v6";
-export const APP_TAGLINE = "Natywny monitoring BLE Android dla ELA Blue PUCK T/RHT";
+export const APP_VERSION = "AutoSafe_Temperatura_v6.0.4_RHT_humidity_fix";
+export const APP_TAGLINE = "Monitoring temperatury, wilgotności i baterii ELA Blue PUCK";
 
 export const COMMON_ROOMS = [
   "Salon",
