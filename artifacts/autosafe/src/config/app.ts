@@ -1,5 +1,5 @@
 export const APP_NAME = "AutoSafe Temperatura";
-export const APP_VERSION = "AutoSafe_Temperatura_v5.3";
+export const APP_VERSION = "AutoSafe_Temperatura_v5.4";
 export const APP_TAGLINE = "Monitoring temperatury Bluetooth dla domu, garażu i kotłowni";
 
 export const COMMON_ROOMS = [

@@ -1,10 +1,9 @@
-// bluetoothService.ts v5.3 — ELA Blue PUCK T/RHT przez BLE Advertising
+// bluetoothService.ts v5.4 — ELA Blue PUCK T/RHT przez BLE Advertising
 //
-// Kluczowa zmiana względem v5.1:
-// - aplikacja NIE kończy nasłuchu komunikatem „brak cache Chrome”,
-// - po kliknięciu Nasłuchuj BLE aplikacja otwiera ponowny wybór czujnika przez requestDevice,
-//   bo requestLEScan w Chrome/Replit potrafi pokazywać „aktywny”, ale nie oddawać ramek.
-// - requestLEScan zostaje tylko jako fallback diagnostyczny.
+// Kluczowa zmiana względem v5.3:
+// - kliknięcie Nasłuchuj BLE najpierw uruchamia requestLEScan i dopasowuje ramki po nazwie,
+//   więc nie wymusza ciągłego ponownego wyboru czujnika po rozłączeniu/odświeżeniu.
+// - requestDevice/watchAdvertisements zostaje tylko jako awaryjny fallback, gdy requestLEScan nie działa.
 // - dekodowanie działa na realnym formacie z nRF Connect:
 //   0x16 / UUID 0x2A6E = temperatura int16LE / 100
 //   0x16 / UUID 0x2A6F = wilgotność uint16LE / 100
@@ -76,6 +75,7 @@ export type ScanMode = "ela" | "all";
 const deviceCache = new Map<string, BTDevice>();
 const advControllers = new Map<string, AbortController>();
 const leScans = new Map<string, { scan: BTLEScan; handler: (e: BTAdvEvent) => void }>();
+let sharedLEScan: BTLEScan | null = null;
 const getBT = (): BTAPI | undefined => (navigator as NavWithBT).bluetooth;
 
 const ELA_NAME_FILTERS = [
@@ -396,9 +396,12 @@ export const stopAdvWatch = (id: string) => { advControllers.get(id)?.abort(); a
 export const stopNameScan = (id: string) => {
   const item = leScans.get(id);
   if (!item) return;
-  try { item.scan.stop(); } catch { /* ignore */ }
   try { getBT()?.removeEventListener("advertisementreceived", item.handler); } catch { /* ignore */ }
   leScans.delete(id);
+  if (leScans.size === 0 && sharedLEScan) {
+    try { sharedLEScan.stop(); } catch { /* ignore */ }
+    sharedLEScan = null;
+  }
 };
 export const getCachedDevice = (id: string) => deviceCache.get(id);
 export const disconnectGATT = (d: BTDevice) => d.gatt?.disconnect();
@@ -434,10 +437,13 @@ export const startNameBasedElaScan = async (
 
   try {
     bt.addEventListener("advertisementreceived", handler);
-    const scan = await bt.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true });
+    const scan = sharedLEScan?.active
+      ? sharedLEScan
+      : await bt.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true });
+    sharedLEScan = scan;
     leScans.set(sensor.id, { scan, handler });
     timeoutId = setTimeout(() => {
-      onError?.(new Error(`Nasłuch BLE aktywny, ale nie odebrano jeszcze ramki z ${targetName}. Zbliż telefon do czujnika albo wybierz czujnik ponownie.`));
+      onError?.(new Error(`Nasłuch BLE aktywny — nadal szukam ${targetName}. Zbliż telefon do czujnika; nie trzeba wybierać go ponownie, dopóki skan jest aktywny.`));
     }, LE_SCAN_TIMEOUT_MS);
     return scan.active !== false;
   } catch (e) {
@@ -489,16 +495,18 @@ export const reconnectSensor = async (
 ): Promise<boolean> => {
   const isElaAdv = sensor.profileId.startsWith("ela-blue-puck") || getProfile(sensor.profileId)?.source === "advertisement";
 
-  // v5.3: przy ręcznym kliknięciu „Nasłuchuj BLE” NIE polegamy na cache Chrome ani samym requestLEScan.
-  // Otwieramy systemowe okno wyboru czujnika, bo tylko wtedy Chrome oddaje prawdziwy BluetoothDevice
-  // z uprawnieniem do watchAdvertisements(). To jest obecnie najpewniejsza metoda w PWA.
+  // v5.4: przy ręcznym kliknięciu „Nasłuchuj BLE” najpierw używamy requestLEScan.
+  // W praktycznych testach Chrome zwraca serviceData tą drogą, a użytkownik nie musi za każdym razem
+  // ponownie wybierać czujnika. Picker zostaje tylko jako fallback.
   if (isElaAdv && options?.forcePicker) {
-    onError?.(new Error(`Otwórz okno Bluetooth i wybierz ${sensor.bluetoothName}. Po wyborze uruchomię watchAdvertisements().`));
-    const picked = await requestDeviceAgainAndWatch(sensor, onData, onError);
-    if (picked) return true;
+    // v5.4: zaczynamy od requestLEScan. Na testowanym telefonie Chrome zwraca serviceData
+    // właśnie tą drogą, a ponowne okno wyboru czujnika jest niewygodne przy każdym odświeżeniu.
+    onError?.(new Error(`Nasłuch BLE aktywny — skanuję reklamy i szukam ${sensor.bluetoothName} po nazwie.`));
+    const scanned = await startNameBasedElaScan(sensor, onData, onError);
+    if (scanned) return true;
 
-    onError?.(new Error(`Nie udało się użyć wyboru Bluetooth. Uruchamiam awaryjny szeroki scan reklam BLE po nazwie ${sensor.bluetoothName}.`));
-    return startNameBasedElaScan(sensor, onData, onError);
+    onError?.(new Error(`Chrome nie uruchomił automatycznego skanu po nazwie. Awaryjnie wybierz ${sensor.bluetoothName} w oknie Bluetooth.`));
+    return requestDeviceAgainAndWatch(sensor, onData, onError);
   }
 
   let device = deviceCache.get(sensor.deviceId);
@@ -521,12 +529,12 @@ export const reconnectSensor = async (
   }
 
   if (isElaAdv) {
-    onError?.(new Error(`Brak cache Chrome — wybierz ${sensor.bluetoothName} ponownie w oknie Bluetooth.`));
-    const picked = await requestDeviceAgainAndWatch(sensor, onData, onError);
-    if (picked) return true;
+    onError?.(new Error(`Brak cache Chrome — uruchamiam skan reklam BLE po nazwie ${sensor.bluetoothName}.`));
+    const scanned = await startNameBasedElaScan(sensor, onData, onError);
+    if (scanned) return true;
 
-    onError?.(new Error(`Fallback: requestLEScan po nazwie ${sensor.bluetoothName}.`));
-    return startNameBasedElaScan(sensor, onData, onError);
+    onError?.(new Error(`Automatyczny scan po nazwie nie działa. Awaryjnie wybierz ${sensor.bluetoothName} w oknie Bluetooth.`));
+    return requestDeviceAgainAndWatch(sensor, onData, onError);
   }
 
   return requestDeviceAgainAndWatch(sensor, onData, onError);

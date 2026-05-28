@@ -1,4 +1,4 @@
-// components/SensorCard.tsx v5.3 — duży przycisk Nasłuchuj BLE otwiera wybór czujnika w Chrome
+// components/SensorCard.tsx v5.4 — większy przycisk nasłuchu bez ciągłego wyboru czujnika, wilgotność i bateria zapamiętywane między ramkami
 import type { Sensor, TempZone } from "@/types/sensor";
 import { getTempZone, ZONE_LABELS } from "@/types/sensor";
 import { formatTemp, formatHumidity, formatPressure, getSettings } from "@/services/storageService";
@@ -84,7 +84,7 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute, onListe
       {/* Quick actions — widoczne także na telefonie */}
       <div className="absolute right-3 top-3 flex gap-1 opacity-100 transition-opacity z-10">
         {onListen && !sensor.isDemo && (
-          <button onClick={(e) => { e.stopPropagation(); onListen(); }} title="Odśwież BLE / nasłuchuj reklam"
+          <button onClick={(e) => { e.stopPropagation(); onListen(); }} title="Odśwież BLE / odczytaj reklamę"
             className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 backdrop-blur text-white/80 hover:bg-white/25 hover:text-white">
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
@@ -194,7 +194,7 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute, onListe
 
         {isWaiting && !sensor.lastTemperature && (
           <div className="mt-3 rounded-2xl bg-white/15 px-3 py-2 text-xs font-medium text-white/80">
-            {sensor.status === "scanning" ? `Nasłuch BLE aktywny — szukam ${sensor.bluetoothName}.` : "Czujnik zapisany — użyj Nasłuchuj BLE, aby odebrać reklamę pomiarową."}
+            {sensor.status === "scanning" ? `Nasłuch BLE aktywny — szukam ${sensor.bluetoothName}.` : "Czujnik zapisany — uruchom Nasłuchuj BLE, aby odebrać temperaturę, wilgotność i baterię."}
           </div>
         )}
 

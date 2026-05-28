@@ -1,4 +1,4 @@
-// routes/sensors.tsx v5.3 — Nasłuch BLE otwiera ponowny wybór czujnika, potem watchAdvertisements
+// routes/sensors.tsx v5.4 — automatyczny nasłuch reklam BLE bez ponownego wybierania, picker tylko awaryjnie
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,9 +24,9 @@ export function SensorsPage() {
     upsert({ ...s, status: "scanning", bleDebug: `Nasłuch BLE aktywny — szukam ${s.bluetoothName}` });
     const ok = await listen(s);
     if (ok) {
-      toast.success("Nasłuch BLE uruchomiony. Jeśli Chrome pokazał okno wyboru, wybierz dokładnie ten sam czujnik i poczekaj na pierwszą ramkę.");
+      toast.success("Nasłuch BLE uruchomiony. Aplikacja będzie dopasowywać ramki po nazwie czujnika bez ponownego wybierania.");
     } else {
-      toast.warning("Nie udało się uruchomić nasłuchu. Kliknij ponownie i wybierz czujnik w oknie Bluetooth.");
+      toast.warning("Nie udało się uruchomić automatycznego nasłuchu. Użyj awaryjnego ponownego wyboru czujnika, jeśli aplikacja o to poprosi.");
     }
   };
 
@@ -92,14 +92,14 @@ export function SensorsPage() {
               <CardContent className="space-y-4">
                 {(s.status === "pending" || s.status === "scanning") && !s.lastTemperature && (
                   <div className="rounded-xl bg-primary/10 px-3 py-2 text-xs text-primary">
-                    {s.status === "scanning" ? `Nasłuch BLE aktywny — szukam ${s.bluetoothName}.` : "Czujnik zapisany — uruchom Nasłuchuj BLE, aby odebrać dane z advertising."}
+                    {s.status === "scanning" ? `Nasłuch BLE aktywny — szukam ${s.bluetoothName}.` : "Czujnik zapisany — uruchom Nasłuchuj BLE, aby odebrać temperaturę, wilgotność i baterię z reklam BLE."}
                   </div>
                 )}
 
                 {!s.isDemo && (
                   <Button className="w-full" onClick={() => handleListen(s)}>
                     <RefreshCw className="mr-2 h-4 w-4" />
-                    Nasłuchuj BLE / wybierz czujnik
+                    Nasłuchuj BLE / odśwież odczyt
                   </Button>
                 )}
                 {s.status === "error" && s.bleDebug && (

@@ -1,4 +1,4 @@
-// hooks/useSensors.ts v5.3 — ręczny Nasłuch BLE wymusza ponowny wybór czujnika w Chrome
+// hooks/useSensors.ts v5.4 — Nasłuch BLE używa skanu po nazwie, zapamiętuje baterię/wilgotność i odświeża status online
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DecodedData, Sensor } from "@/types/sensor";
@@ -7,7 +7,7 @@ import { addMeasurement, deleteSensor as storageDelete, getSensors, upsertSensor
 import { cacheGrantedDevices, getCachedDevice, reconnectSensor, startAdvWatch, stopAdvWatch, stopNameScan } from "@/services/bluetoothService";
 import { getProfile } from "@/services/sensorProfiles";
 
-const STALE_MS = 60_000;
+const STALE_MS = 120_000;
 
 export function useSensors() {
   const [sensors, setSensors] = useState<Sensor[]>(() => getSensors());
@@ -30,13 +30,14 @@ export function useSensors() {
 
   const refresh = useCallback(() => setRev((r) => r + 1), []);
 
-  const applyBleData = useCallback((sensorId: string, data: DecodedData) => {
+  const applyBleData = useCallback((sensorId: string, data: DecodedData, detectedProfileId?: string | null) => {
     const now = new Date().toISOString();
     const current = getSensors().find((s) => s.id === sensorId || s.deviceId === sensorId);
     if (!current) return;
 
     const updated: Sensor = {
       ...current,
+      profileId: detectedProfileId && detectedProfileId !== current.profileId ? detectedProfileId : (data.humidity !== undefined ? "ela-blue-puck-rht" : current.profileId),
       lastTemperature: data.temperature ?? current.lastTemperature,
       lastHumidity: data.humidity ?? current.lastHumidity,
       lastPressure: data.pressure ?? current.lastPressure,
@@ -74,7 +75,9 @@ export function useSensors() {
       const list = getSensors().map((s) => {
         if (s.isDemo || !s.lastReadAt || s.status === "pending") return s;
         const stale = Date.now() - new Date(s.lastReadAt).getTime() > STALE_MS;
-        return stale && s.status === "connected" ? { ...s, status: "disconnected" as const } : s;
+        if (stale && s.status === "connected") return { ...s, status: "disconnected" as const };
+        if (!stale && (s.status === "disconnected" || s.status === "scanning" || s.status === "error")) return { ...s, status: "connected" as const };
+        return s;
       });
       list.forEach((s) => upsertSensor(s));
       if (isMounted.current) setSensors(list);
@@ -103,7 +106,7 @@ export function useSensors() {
         startAdvWatch(
           device,
           sensor.profileId,
-          (result) => applyBleData(sensor.id, result.data),
+          (result) => applyBleData(sensor.id, result.data, result.detectedProfileId),
           (err) => {
             console.warn(`BLE adv error (${sensor.roomName}):`, err.message);
             const current = getSensors().find((s) => s.id === sensor.id);
@@ -133,11 +136,11 @@ export function useSensors() {
     upsertSensor({
       ...before,
       status: "scanning",
-      bleDebug: `Nasłuch BLE aktywny — szukam ${before.bluetoothName || before.roomName}`
+      bleDebug: `Nasłuch BLE aktywny — szukam ${before.bluetoothName || before.roomName} po nazwie, bez ponownego wybierania`
     });
     safeSetSensors();
 
-    const ok = await reconnectSensor(s, (result) => applyBleData(s.id, result.data), (e) => {
+    const ok = await reconnectSensor(s, (result) => applyBleData(s.id, result.data, result.detectedProfileId), (e) => {
       const current = getSensors().find((x) => x.id === s.id);
       if (!current) return;
       const msg = e.message;
@@ -148,7 +151,11 @@ export function useSensors() {
         msg.includes("wybierz czujnik ponownie") ||
         msg.includes("Otwórz okno Bluetooth") ||
         msg.includes("Wybrano") ||
-        msg.includes("Fallback");
+        msg.includes("Fallback") ||
+        msg.includes("skanuję reklamy") ||
+        msg.includes("automatyczny scan") ||
+        msg.includes("Automatyczny scan") ||
+        msg.includes("skan reklam BLE");
       upsertSensor({ ...current, status: isInfo ? "scanning" : "error", bleDebug: msg });
       safeSetSensors();
     }, { forcePicker: true });
@@ -159,7 +166,7 @@ export function useSensors() {
         ...current,
         status: ok ? "scanning" : "error",
         bleDebug: ok
-          ? (current.bleDebug || `Nasłuch BLE aktywny — czekam na reklamę ${current.bluetoothName}`)
+          ? (current.bleDebug || `Nasłuch BLE aktywny — czekam na kolejną reklamę ${current.bluetoothName}`)
           : (current.bleDebug || "Nie udało się uruchomić nasłuchu BLE.")
       });
       safeSetSensors();
