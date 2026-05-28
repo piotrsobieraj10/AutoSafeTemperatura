@@ -1,4 +1,4 @@
-// pages/SettingsPage.tsx v5.6 — ustawienia, eksporty, diagnostyka i PWA
+// pages/SettingsPage.tsx v5.6.1 — ustawienia, eksporty, diagnostyka i PWA
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Bluetooth, Info, Moon, Radio, Sun, Thermometer, Trash2, Bell, Vibrate, Monitor, Download, Upload, Database, Eye, EyeOff, FileText } from "lucide-react";
-import { clearAlerts, clearAllMeasurements, createBackupJson, downloadTextFile, exportCsv, getMeasurements, getSettings, importBackupJson, openHtmlReport, saveSettings, type AppSettings } from "@/services/storageService";
+import { clearAlerts, clearAllMeasurements, clearLocalAppData, createBackupJson, downloadTextFile, exportCsv, getMeasurements, getSettings, importBackupJson, openHtmlReport, saveSettings, type AppSettings } from "@/services/storageService";
 import { ensureDemoSensors, removeDemoSensors, startDemoLoop, stopDemoLoop } from "@/services/demoService";
 import { isAdvertisementScanSupported, isBluetoothAvailable, isLEScanSupported } from "@/services/bluetoothService";
 import { sensorProfiles } from "@/services/sensorProfiles";
@@ -121,6 +121,7 @@ export function SettingsPage() {
           <label className="inline-flex cursor-pointer items-center rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted"><Upload className="mr-2 h-4 w-4" />Import JSON<input type="file" accept="application/json" className="hidden" onChange={(e) => importFile(e.target.files?.[0])} /></label>
           <Button variant="outline" size="sm" onClick={() => { clearAlerts(); toast.success("Alerty wyczyszczone."); }}><Bell className="mr-2 h-4 w-4" />Wyczyść alerty</Button>
           <Button variant="destructive" size="sm" onClick={() => { if (confirm("Usunąć całą historię pomiarów?")) { clearAllMeasurements(); toast.success("Historia wyczyszczona."); setMsCount(0); } }}><Trash2 className="mr-2 h-4 w-4" />Usuń historię</Button>
+          <Button variant="destructive" size="sm" onClick={() => { if (confirm("Wyczyścić wszystkie lokalne dane aplikacji? Usunie czujniki, historię, alerty i ustawienia zapisane w tej przeglądarce.")) { clearLocalAppData(); toast.success("Dane lokalne wyczyszczone. Aplikacja odświeży się za chwilę."); setTimeout(() => window.location.reload(), 500); } }}><Trash2 className="mr-2 h-4 w-4" />Wyczyść dane aplikacji</Button>
         </CardContent>
       </Card>
 

@@ -1,5 +1,5 @@
-// pages/DashboardPage.tsx v5.6 — profesjonalny pulpit, tryb uwagi i monitoring czasowy
-import { useMemo, useState } from "react";
+// pages/DashboardPage.tsx v5.6.1 — profesjonalny pulpit, tryb uwagi i monitoring czasowy
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -44,7 +44,15 @@ export function DashboardPage() {
   const [filter, setFilter] = useState<Filter>("all");
   const [monitorMode, setMonitorMode] = useState<MonitorDuration>((getSettings().monitorDuration ?? "quick") as MonitorDuration);
   const [showTips, setShowTips] = useState(getSettings().showFirstRunTips ?? true);
+  const monitorTimeoutRef = useRef<number | null>(null);
   const settings = getSettings();
+
+  useEffect(() => {
+    return () => {
+      if (monitorTimeoutRef.current) window.clearTimeout(monitorTimeoutRef.current);
+      stopMonitoringAll();
+    };
+  }, [stopMonitoringAll]);
 
   const connected = sensors.filter(isFresh);
   const withTemp = sensors.filter((s) => s.lastTemperature != null);
@@ -78,16 +86,22 @@ export function DashboardPage() {
       return;
     }
     const ms = MONITOR_MS[monitorMode];
+    if (monitorTimeoutRef.current) window.clearTimeout(monitorTimeoutRef.current);
     if (ms) {
-      window.setTimeout(() => {
+      monitorTimeoutRef.current = window.setTimeout(() => {
         stopMonitoringAll();
         setMonitoring(false);
+        monitorTimeoutRef.current = null;
         toast.success("Monitoring zakończony. Odczyty zostały zapisane lokalnie.");
       }, ms);
     }
   };
 
   const handleStopMonitoring = () => {
+    if (monitorTimeoutRef.current) {
+      window.clearTimeout(monitorTimeoutRef.current);
+      monitorTimeoutRef.current = null;
+    }
     stopMonitoringAll();
     setMonitoring(false);
     toast.info("Monitoring BLE zatrzymany.");

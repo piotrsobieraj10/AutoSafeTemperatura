@@ -11,11 +11,9 @@ const queryClient = new QueryClient();
 
 const rootRoute = createRootRoute({
   component: () => (
-    <AppErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <AppShell />
-      </QueryClientProvider>
-    </AppErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <AppShell />
+    </QueryClientProvider>
   ),
   notFoundComponent: () => (
     <div className="flex min-h-[60vh] items-center justify-center">
@@ -51,5 +49,9 @@ declare module "@tanstack/react-router" {
 }
 
 export default function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <AppErrorBoundary>
+      <RouterProvider router={router} />
+    </AppErrorBoundary>
+  );
 }

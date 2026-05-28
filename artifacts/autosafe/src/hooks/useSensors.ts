@@ -1,4 +1,4 @@
-// hooks/useSensors.ts v5.6 — monitoruj wszystkie, kalibracja, alerty, stabilny online/offline
+// hooks/useSensors.ts v5.6.1 — hotfix stabilności: bez pętli autosafe:data-changed, bez automatycznego BLE po starcie
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DecodedData, Sensor } from "@/types/sensor";
@@ -8,6 +8,7 @@ import { cacheGrantedDevices, getCachedDevice, reconnectSensor, startAdvWatch, s
 import { getProfile } from "@/services/sensorProfiles";
 
 const STALE_MS = 120_000;
+const STATUS_REFRESH_MS = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const applyCalibration = (sensor: Sensor, data: DecodedData): DecodedData => ({
@@ -21,16 +22,20 @@ export function useSensors() {
   const [rev, setRev] = useState(0);
   const watchedIds = useRef(new Set<string>());
   const isMounted = useRef(true);
+  const statusTimer = useRef<number | null>(null);
 
   useEffect(() => {
     isMounted.current = true;
     cacheGrantedDevices().catch(() => {});
-    return () => { isMounted.current = false; };
+    return () => {
+      isMounted.current = false;
+      if (statusTimer.current) window.clearTimeout(statusTimer.current);
+    };
   }, []);
 
   const safeSetSensors = useCallback(() => {
     if (!isMounted.current) return;
-    setTimeout(() => { if (isMounted.current) setSensors(getSensors()); }, 0);
+    window.setTimeout(() => { if (isMounted.current) setSensors(getSensors()); }, 0);
   }, []);
 
   const refresh = useCallback(() => setRev((r) => r + 1), []);
@@ -83,6 +88,7 @@ export function useSensors() {
       lastBatteryReadAt: (data.battery !== undefined || data.batteryVoltage !== undefined) ? now : current.lastBatteryReadAt,
       status: "connected",
     };
+
     upsertSensor(updated);
     maybeCreateAlerts(updated);
 
@@ -104,38 +110,67 @@ export function useSensors() {
     safeSetSensors();
   }, [maybeCreateAlerts, safeSetSensors]);
 
-  useEffect(() => {
-    const update = () => {
-      const now = Date.now();
-      const settings = getSettings();
-      const list = getSensors().map((s) => {
-        if (s.isDemo || !s.lastReadAt || s.status === "pending") return s;
-        const stale = now - new Date(s.lastReadAt).getTime() > STALE_MS;
-        if (stale && s.status === "connected") {
-          const minutes = s.offlineAlertMinutes ?? 30;
-          if (!s.alertMuted && now - new Date(s.lastReadAt).getTime() > minutes * 60_000) {
-            addAlert({ id: `${s.id}-offline-${now}`, sensorId: s.id, roomName: s.roomName, type: "offline", value: Math.round((now - new Date(s.lastReadAt).getTime()) / 60_000), threshold: minutes, createdAt: new Date().toISOString(), acknowledged: false });
-          }
-          return { ...s, status: "disconnected" as const };
+  const refreshStatuses = useCallback(() => {
+    const now = Date.now();
+    const current = getSensors();
+    let changed = false;
+    const next = current.map((s) => {
+      if (s.isDemo || !s.lastReadAt || s.status === "pending") return s;
+      const last = new Date(s.lastReadAt).getTime();
+      if (Number.isNaN(last)) return s;
+      const stale = now - last > STALE_MS;
+      if (stale && s.status === "connected") {
+        const minutes = s.offlineAlertMinutes ?? 30;
+        if (!s.alertMuted && now - last > minutes * 60_000) {
+          addAlert({ id: `${s.id}-offline-${now}`, sensorId: s.id, roomName: s.roomName, type: "offline", value: Math.round((now - last) / 60_000), threshold: minutes, createdAt: new Date().toISOString(), acknowledged: false });
         }
-        if (!stale && (s.status === "disconnected" || s.status === "scanning" || s.status === "error")) return { ...s, status: "connected" as const };
-        if (settings.autoStartMonitor && getProfile(s.profileId)?.source === "advertisement" && !s.isDemo && s.status !== "scanning") return { ...s, status: s.status };
-        return s;
+        changed = true;
+        return { ...s, status: "disconnected" as const };
+      }
+      if (!stale && (s.status === "disconnected" || s.status === "error")) {
+        changed = true;
+        return { ...s, status: "connected" as const };
+      }
+      return s;
+    });
+
+    // Najważniejszy hotfix: nie zapisuj wszystkich czujników po każdym autosafe:data-changed.
+    // W v5.6 to mogło utworzyć pętlę: event -> upsertSensor -> event -> upsertSensor.
+    if (changed) {
+      next.forEach((s, i) => {
+        if (s.status !== current[i]?.status) upsertSensor(s);
       });
-      list.forEach((s) => upsertSensor(s));
-      if (isMounted.current) setSensors(list);
+    }
+    if (isMounted.current) setSensors(next);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const schedule = () => {
+      if (cancelled) return;
+      if (statusTimer.current) window.clearTimeout(statusTimer.current);
+      statusTimer.current = window.setTimeout(refreshStatuses, 250);
     };
-    update();
-    const handler = () => update();
-    window.addEventListener("storage", handler);
-    window.addEventListener("autosafe:data-changed", handler as EventListener);
-    const interval = setInterval(update, 3000);
-    return () => { window.removeEventListener("storage", handler); window.removeEventListener("autosafe:data-changed", handler as EventListener); clearInterval(interval); };
-  }, [rev]);
+
+    refreshStatuses();
+    window.addEventListener("storage", schedule);
+    window.addEventListener("autosafe:data-changed", schedule as EventListener);
+    const interval = window.setInterval(refreshStatuses, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      if (statusTimer.current) window.clearTimeout(statusTimer.current);
+      window.removeEventListener("storage", schedule);
+      window.removeEventListener("autosafe:data-changed", schedule as EventListener);
+      window.clearInterval(interval);
+    };
+  }, [rev, refreshStatuses]);
 
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
+      // Hotfix v5.6.1: BLE nie startuje samoczynnie. Tylko ręczne kliknięcie.
+      if (!getSettings().autoStartMonitor) return;
+
       await cacheGrantedDevices().catch(() => []);
       if (cancelled) return;
       const advSensors = getSensors().filter((s) => !s.isDemo && getProfile(s.profileId)?.source === "advertisement" && !watchedIds.current.has(s.id));

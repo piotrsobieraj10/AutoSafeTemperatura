@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { sanitizeLocalStorage } from "@/services/storageService";
 
 const themeBootScript = () => {
   try {
@@ -14,6 +15,27 @@ const themeBootScript = () => {
   } catch (_) { /* ignore boot theme errors */ }
 };
 
-themeBootScript();
+const cleanupOldPwaCache = () => {
+  // Hotfix v5.6.1: stare cache/SW z poprzednich paczek potrafi mieszać pliki na Android Chrome.
+  // Czyścimy je asynchronicznie, bez blokowania startu aplikacji.
+  try {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistrations?.().then((regs) => regs.forEach((r) => r.unregister().catch(() => {}))).catch(() => {});
+    }
+    if ("caches" in window) {
+      caches.keys().then((keys) => keys
+        .filter((key) => key.includes("autosafe") || key.includes("termo") || key.includes("temperatura"))
+        .forEach((key) => caches.delete(key).catch(() => false))
+      ).catch(() => {});
+    }
+  } catch (_) { /* ignore cache cleanup */ }
+};
 
-createRoot(document.getElementById("root")!).render(<App />);
+themeBootScript();
+sanitizeLocalStorage();
+cleanupOldPwaCache();
+
+const root = document.getElementById("root");
+if (!root) throw new Error("Brak elementu #root dla aplikacji AutoSafe Temperatura");
+
+createRoot(root).render(<App />);
