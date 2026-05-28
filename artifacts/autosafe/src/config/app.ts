@@ -1,5 +1,5 @@
 export const APP_NAME = "AutoSafe Temperatura";
-export const APP_VERSION = "AutoSafe_Temperatura_v6_Android_APK";
+export const APP_VERSION = "AutoSafe_Temperatura_v6.0.1_Android_APK";
 export const APP_TAGLINE = "Monitoring temperatury, wilgotności i baterii ELA Blue PUCK";
 
 export const COMMON_ROOMS = [

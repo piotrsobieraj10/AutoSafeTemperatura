@@ -19,7 +19,7 @@ import android.os.ParcelUuid;
 import android.util.SparseArray;
 
 import com.getcapacitor.JSObject;
-import com.getcapacitor.PermissionCallback;
+import com.getcapacitor.annotation.PermissionCallback;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -65,7 +65,7 @@ public class AutosafeBlePlugin extends Plugin {
 
     @PluginMethod
     public void startScan(PluginCall call) {
-        if (!hasRequiredPermissions()) {
+        if (!hasBlePermissions()) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 requestPermissionForAlias("nearby", call, "permissionCallback");
             } else {
@@ -78,7 +78,7 @@ public class AutosafeBlePlugin extends Plugin {
 
     @PermissionCallback
     private void permissionCallback(PluginCall call) {
-        if (!hasRequiredPermissions()) {
+        if (!hasBlePermissions()) {
             call.reject("Brak uprawnień Bluetooth. Nadaj zgodę na Urządzenia w pobliżu / Bluetooth.");
             return;
         }
@@ -229,7 +229,7 @@ public class AutosafeBlePlugin extends Plugin {
         return manager != null ? manager.getAdapter() : null;
     }
 
-    private boolean hasRequiredPermissions() {
+    private boolean hasBlePermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             return getPermissionState("nearby") == PermissionState.GRANTED;
         }
