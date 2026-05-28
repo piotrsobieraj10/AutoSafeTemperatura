@@ -8,6 +8,7 @@ on:
 
 env:
   PORT: 3000
+  BASE_PATH: /
 
 jobs:
   build-android-apk:
@@ -47,12 +48,14 @@ jobs:
         run: pnpm run build
         env:
           PORT: 3000
+          BASE_PATH: /
 
       - name: Sync Capacitor Android
         working-directory: artifacts/autosafe
         run: pnpm exec cap sync android
         env:
           PORT: 3000
+          BASE_PATH: /
 
       - name: Make Gradle executable
         working-directory: artifacts/autosafe/android
