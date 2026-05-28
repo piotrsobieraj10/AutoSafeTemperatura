@@ -1,0 +1,161 @@
+Pracujemy na istniejącym projekcie AutoSafeTemperatura.
+
+Wgrałem paczkę:
+AutoSafe_Temperatura_v6_0_3_i_v6_0_4_patche.zip
+
+W środku są 2 patche:
+1. 01_AutoSafe_Temperatura_v6_0_3_scanner_null_error_decoder_patch.zip
+2. 02_AutoSafe_Temperatura_v6_0_4_RHT_humidity_fix_patch.zip
+
+Zastosuj je dokładnie po kolei:
+najpierw v6.0.3, potem v6.0.4.
+
+WAŻNE:
+- Nie przebudowuj projektu od zera.
+- Nie usuwaj Androida.
+- Nie cofaj PWA.
+- Nie usuwaj logo AutoSafe.
+- Nie zmieniaj repozytorium GitHub.
+- Nie rób force push.
+- Nie cofaj działającego odczytu temperatury i baterii.
+- Nie zmieniaj dekoderów poza poprawką scanner null, dekoderem błędów BLE i wilgotnością RHT.
+- Nie rób commit/push, dopóki build i cap sync nie przejdą.
+
+Najpierw wykonaj:
+git status
+git branch backup-przed-v6-0-3-i-v6-0-4
+
+Jeżeli branch już istnieje, idź dalej.
+
+ETAP 1 — zastosuj v6.0.3 scanner null + error decoder
+
+1. Rozpakuj:
+01_AutoSafe_Temperatura_v6_0_3_scanner_null_error_decoder_patch.zip
+
+2. Zastosuj patch do aktualnego projektu.
+
+3. Poprawka v6.0.3 ma naprawić błąd:
+BluetoothLeScanner.startScan(...) on a null object reference
+
+4. Sprawdź pliki:
+artifacts/autosafe/android/app/src/main/java/im/autosafe/temperatura/AutosafeBlePlugin.java
+artifacts/autosafe/native/android/AutosafeBlePlugin.java
+artifacts/autosafe/src/services/nativeBleService.ts
+artifacts/autosafe/src/services/bleErrorDecoder.ts
+artifacts/autosafe/src/config/app.ts
+
+5. W AutosafeBlePlugin.java przed każdym scanner.startScan(...) musi być pełna kontrola:
+- BluetoothManager != null
+- BluetoothAdapter != null
+- adapter.isEnabled()
+- BluetoothLeScanner scanner = adapter.getBluetoothLeScanner()
+- scanner != null
+
+Jeżeli scanner == null, NIE wolno wywołać startScan.
+Zwróć do JS czytelny błąd:
+BLE_SCANNER_NULL
+
+Komunikat:
+"Skaner BLE jest niedostępny. Włącz Bluetooth, nadaj uprawnienie „Urządzenia w pobliżu” i uruchom aplikację ponownie."
+
+6. startScan musi być w try/catch:
+- SecurityException → BLE_PERMISSION_DENIED
+- IllegalStateException → BLE_STATE_ERROR
+- Exception → BLE_SCAN_START_FAILED
+
+7. ScanCallback musi być odporny:
+- result == null → ignoruj
+- result.getScanRecord() == null → nie crashuj
+- result.getDevice() == null → nie crashuj
+- getName/getAddress bezpiecznie
+- notifyListeners tylko przez safeNotify na głównym wątku
+
+8. Dodaj/decyduj przez bleErrorDecoder.ts czytelne błędy:
+- BLE_SCANNER_NULL
+- BLE_OFF
+- BLE_PERMISSION_DENIED
+- BLE_NOT_SUPPORTED
+- BLE_SCAN_ALREADY_STARTED
+- BLE_SCAN_INTERNAL_ERROR
+- BLE_OUT_OF_HARDWARE_RESOURCES
+- BLE_SCANNING_TOO_FREQUENTLY
+- BLE_UNKNOWN_ERROR
+
+9. nativeBleService.ts ma pokazywać użytkownikowi prosty komunikat, a techniczne szczegóły tylko w diagnostyce.
+
+10. Po v6.0.3 wersja mogłaby być:
+AutoSafe_Temperatura_v6.0.3_scanner_null_error_decoder
+
+Ale to będzie etap pośredni — końcową wersję ustawi v6.0.4.
+
+ETAP 2 — zastosuj v6.0.4 RHT humidity fix
+
+1. Rozpakuj:
+02_AutoSafe_Temperatura_v6_0_4_RHT_humidity_fix_patch.zip
+
+2. Zastosuj patch po v6.0.3.
+
+3. Poprawka v6.0.4 ma naprawić wilgotność ELA Blue PUCK RHT.
+
+Realne ramki:
+04 16 6F 2A 33 = 51%
+04 16 6F 2A 32 = 50%
+
+Dekoder 0x2A6F ma działać tak:
+- jeżeli payload ma 1 bajt: humidity = payload[0]
+  przykład: 0x33 = 51%
+- jeżeli payload ma 2 bajty lub więcej: fallback uint16LE / 100
+
+Temperatura zostaje:
+0x2A6E = int16LE / 100
+
+Bateria zostaje:
+0x0757 = bateria mV zgodnie z obecnym dekoderem.
+
+4. Końcowa wersja w UI ma być:
+AutoSafe_Temperatura_v6.0.4_RHT_humidity_fix
+
+ETAP 3 — build i synchronizacja Androida
+
+Uruchom:
+
+PORT=3000 BASE_PATH=/ pnpm --filter @workspace/autosafe run build
+
+Jeżeli są błędy TypeScript/React/JavaScript, napraw je bez usuwania funkcji.
+
+Potem:
+
+cd artifacts/autosafe
+pnpm exec cap sync android
+
+ETAP 4 — weryfikacja
+
+Sprawdź i podaj:
+- czy v6.0.3 zastosował się poprawnie,
+- czy v6.0.4 zastosował się poprawnie,
+- czy build web przeszedł,
+- czy cap sync android przeszedł,
+- czy wersja UI to AutoSafe_Temperatura_v6.0.4_RHT_humidity_fix,
+- czy AutosafeBlePlugin.java nie wywołuje startScan, gdy scanner == null,
+- czy błędy BLE są tłumaczone na czytelne komunikaty,
+- czy 0x2A6F obsługuje 1 bajt wilgotności,
+- czy 0x2A6E temperatura została bez zmian,
+- czy 0x0757 bateria została bez zmian,
+- wynik git status.
+
+ETAP 5 — commit i push
+
+Jeżeli wszystko przejdzie, wykonaj:
+
+cd ~/workspace
+git add .
+git commit -m "AutoSafe_Temperatura_v6.0.4 - fix BLE scanner errors and RHT humidity"
+git push origin main
+
+Po pushu GitHub Actions ma zbudować nowe APK.
+
+Na końcu podaj:
+- czy commit/push przeszedł,
+- czy GitHub Actions ruszyło,
+- jakie pliki zmieniłeś,
+- gdzie pobrać nowe APK po zakończeniu workflow.
