@@ -1,0 +1,56 @@
+name: Build AutoSafe Temperatura Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-android-apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        working-directory: artifacts/autosafe
+        run: npm install
+
+      - name: Build web app
+        working-directory: artifacts/autosafe
+        run: npm run build
+
+      - name: Sync Capacitor Android
+        working-directory: artifacts/autosafe
+        run: npx cap sync android
+
+      - name: Make Gradle executable
+        working-directory: artifacts/autosafe/android
+        run: chmod +x ./gradlew
+
+      - name: Build debug APK
+        working-directory: artifacts/autosafe/android
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSafe_Temperatura_v6_debug_apk
+          path: artifacts/autosafe/android/app/build/outputs/apk/debug/app-debug.apk
