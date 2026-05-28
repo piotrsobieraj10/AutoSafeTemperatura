@@ -1,15 +1,14 @@
 {
   "name": "AutoSafe Temperatura",
   "short_name": "AutoSafe Temp",
-  "description": "Monitoring temperatury i wilgotności Bluetooth BLE.",
+  "description": "Monitoring czujników ELA Blue PUCK T/RHT przez BLE.",
   "start_url": "/",
-  "scope": "/",
   "display": "standalone",
-  "background_color": "#070706",
-  "theme_color": "#c9a451",
+  "background_color": "#050505",
+  "theme_color": "#c2a14b",
   "orientation": "portrait",
-  "lang": "pl",
   "icons": [
-    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "/autosafe-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/autosafe-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

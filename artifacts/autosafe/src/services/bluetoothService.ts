@@ -1,4 +1,4 @@
-// bluetoothService.ts v5.4 — ELA Blue PUCK T/RHT przez BLE Advertising
+// bluetoothService.ts v5.6 — ELA Blue PUCK T/RHT przez BLE Advertising
 //
 // Kluczowa zmiana względem v5.3:
 // - kliknięcie Nasłuchuj BLE najpierw uruchamia requestLEScan i dopasowuje ramki po nazwie,
@@ -402,6 +402,15 @@ export const stopNameScan = (id: string) => {
     try { sharedLEScan.stop(); } catch { /* ignore */ }
     sharedLEScan = null;
   }
+};
+
+export const stopAllBleActivity = () => {
+  advControllers.forEach((controller) => { try { controller.abort(); } catch { /* ignore */ } });
+  advControllers.clear();
+  leScans.forEach(({ handler }) => { try { getBT()?.removeEventListener("advertisementreceived", handler); } catch { /* ignore */ } });
+  leScans.clear();
+  if (sharedLEScan) { try { sharedLEScan.stop(); } catch { /* ignore */ } }
+  sharedLEScan = null;
 };
 export const getCachedDevice = (id: string) => deviceCache.get(id);
 export const disconnectGATT = (d: BTDevice) => d.gatt?.disconnect();

@@ -1,0 +1,116 @@
+Pracujemy na istniejącym projekcie AutoSafeTemperatura.
+
+Wgrałem dwa patche:
+1. AutoSafe_Temperatura_v5_5_patch.zip
+2. AutoSafe_Temperatura_v5_6_patch.zip
+
+Zastosuj je po kolei, bardzo ostrożnie:
+najpierw v5.5, potem v5.6.
+
+WAŻNE:
+- Nie przebudowuj aplikacji od zera.
+- Nie kasuj projektu.
+- Nie zmieniaj repozytorium GitHub.
+- Nie rób force push.
+- Nie usuwaj działającego odczytu BLE z v5.3/v5.4.
+- Nie cofaj dekoderów ELA Blue PUCK.
+- Nie przywracaj starego fałszywego logo.
+- Zachowaj prawdziwe złote logo AutoSafe z patcha v5.5.
+- Zachowaj wersję końcową jako AutoSafe_Temperatura_v5.6.
+
+Najpierw zrób punkt bezpieczeństwa:
+1. Uruchom:
+   git status
+
+2. Jeśli są niezapisane zmiany, pokaż mi je i nie nadpisuj ich bez decyzji.
+
+3. Utwórz branch backup:
+   git branch backup-przed-v5-5-v5-6
+
+4. Dodatkowo możesz zrobić lokalny commit/backup, jeśli będzie potrzebny, ale nie rób force push.
+
+Kolejność pracy:
+
+ETAP 1 — zastosuj patch v5.5:
+1. Rozpakuj AutoSafe_Temperatura_v5_5_patch.zip.
+2. Skopiuj pliki z patcha do aktualnego projektu, nadpisując istniejące pliki tylko tam, gdzie patch tego wymaga.
+3. Sprawdź, czy po v5.5 są:
+   - prawdziwe złote logo AutoSafe,
+   - PWA ikony z prawdziwym logo,
+   - wersja AutoSafe_Temperatura_v5.5,
+   - nowy pulpit monitoringu,
+   - Monitoruj wszystkie,
+   - karty czujników z temperaturą, wilgotnością, baterią, RSSI i statusem,
+   - diagnostyka BLE sterowana z ustawień,
+   - obsługa 0x2A6E temperatura,
+   - obsługa 0x2A6F wilgotność,
+   - obsługa 0x0757 bateria,
+   - kalibracja,
+   - alerty,
+   - historia,
+   - eksport CSV,
+   - backup/import JSON.
+
+ETAP 2 — zastosuj patch v5.6:
+1. Dopiero po poprawnym zastosowaniu v5.5 rozpakuj AutoSafe_Temperatura_v5_6_patch.zip.
+2. Skopiuj pliki z patcha v5.6 do projektu, nadpisując pliki tam, gdzie patch tego wymaga.
+3. Patch v5.6 jest końcowy i ma ustawić wersję aplikacji na AutoSafe_Temperatura_v5.6.
+4. Sprawdź, czy po v5.6 działają:
+   - Centrum monitoringu,
+   - filtry Wszystkie / Uwaga / Online / Offline,
+   - sekcja Wymaga uwagi,
+   - tryby monitoringu: szybki odczyt 30 s, monitoring 5 min, monitoring ciągły,
+   - przycisk zatrzymania monitoringu,
+   - lepsze pierwsze uruchomienie,
+   - raport PDF/druk,
+   - historia alertów,
+   - blokada duplikatów czujników,
+   - ustawienia monitoringu,
+   - ukryta diagnostyka BLE,
+   - prawdziwe złote logo AutoSafe,
+   - odczyt ELA Blue PUCK T/RHT.
+
+Bardzo ważne dla BLE:
+Nie wolno uszkodzić działającego odczytu z ramek:
+- Service Data UUID 0x2A6E = temperatura int16LE / 100
+- Service Data UUID 0x2A6F = wilgotność uint16LE / 100
+- Manufacturer Data companyId 0x0757 = bateria mV z ostatnich dwóch bajtów / zgodnie z obecnym dekoderem
+- requestLEScan ma dalej dopasowywać czujniki po nazwie, np. P T EN 81F7B, P T EN 81F82C, P RHT...
+- aplikacja ma zachowywać temperaturę, wilgotność i baterię między różnymi ramkami BLE
+- bateria nie może znikać, gdy kolejna ramka ma tylko temperaturę
+- status Online ma wynikać ze świeżego lastSeenAt/RSSI/odebranej ramki
+
+Po zastosowaniu obu patchy uruchom:
+npm install
+npm run build
+
+Jeżeli build pokaże błędy TypeScript/React:
+- napraw je bez zmiany założeń funkcjonalnych,
+- nie usuwaj funkcji, tylko popraw typy/importy/logikę,
+- nie zastępuj aplikacji prostszą wersją.
+
+Po buildzie uruchom aplikację i sprawdź:
+1. Czy w UI jest AutoSafe_Temperatura_v5.6.
+2. Czy logo jest prawdziwym złotym logo AutoSafe.
+3. Czy aplikacja startuje bez błędu.
+4. Czy tryb jasny/ciemny/auto działa.
+5. Czy demo jest wyłączone domyślnie.
+6. Czy czujniki ELA Blue PUCK T pokazują temperaturę.
+7. Czy bateria nie znika po kolejnych ramkach.
+8. Czy RHT ma przygotowany odczyt wilgotności.
+9. Czy działa Monitoruj wszystkie.
+10. Czy działa filtr Wymaga uwagi.
+11. Czy działa raport PDF/druk.
+12. Czy działa eksport CSV.
+13. Czy działa backup/import JSON.
+
+Na końcu podaj mi dokładnie:
+- jakie pliki zmieniłeś,
+- czy v5.5 zastosowało się poprawnie,
+- czy v5.6 zastosowało się poprawnie,
+- czy npm run build przeszedł,
+- czy wersja w UI to AutoSafe_Temperatura_v5.6,
+- czy logo jest prawdziwe złote AutoSafe,
+- czy odczyt BLE 0x2A6E / 0x2A6F / 0x0757 pozostał aktywny,
+- jak przetestować aplikację na telefonie,
+- jaki jest wynik git status.

@@ -1,5 +1,5 @@
 // ============================================================
-// types/sensor.ts v2 — rozszerzone typy dla wszystkich czujników
+// types/sensor.ts v5.6 — AutoSafe Temperatura, ELA Blue PUCK T/RHT
 // ============================================================
 
 export type SensorStatus = "connected" | "disconnected" | "scanning" | "pending" | "error" | "unknown";
@@ -13,18 +13,26 @@ export interface Sensor {
   macAddress?: string;
   roomName: string;
   customName?: string;
+  locationIcon?: "home" | "bed" | "kitchen" | "bath" | "garage" | "boiler" | "warehouse" | "leaf" | "sensor";
   profileId: string;
   lastTemperature?: number;   // zawsze °C wewnętrznie
   lastHumidity?: number;
   lastPressure?: number;      // hPa — RuuviTag
   lastReadAt?: string;
+  lastTemperatureReadAt?: string;
+  lastHumidityReadAt?: string;
+  lastBatteryReadAt?: string;
   status: SensorStatus;
   source: SensorSource;
+  // Kalibracja lokalna
+  temperatureOffset?: number;
+  humidityOffset?: number;
   // Alerty
   minTempAlert?: number;
   maxTempAlert?: number;
   minHumidityAlert?: number;
   maxHumidityAlert?: number;
+  offlineAlertMinutes?: number;
   // Meta
   lastRssi?: number;
   batteryLevel?: number;
@@ -43,11 +51,13 @@ export interface Measurement {
   id: string;
   sensorId: string;
   roomName: string;
-  temperature: number;        // °C
-  humidity?: number;
+  bluetoothName?: string;
+  temperature: number;        // °C po kalibracji
+  humidity?: number;          // % po kalibracji
   pressure?: number;          // hPa
   rssi?: number;
   batteryLevel?: number;
+  batteryVoltage?: number;
   createdAt: string;
 }
 
@@ -96,13 +106,19 @@ export interface AppSettings {
   alertVibration: boolean;
   chartDefaultRange: "1h" | "24h" | "7d";
   maxMeasurements: number;
+  dashboardDensity?: "comfortable" | "compact";
+  showBleDiagnostics?: boolean;
+  autoStartMonitor?: boolean;
+  monitorDuration?: "quick" | "fiveMin" | "continuous";
+  showFirstRunTips?: boolean;
+  hideTechnicalMessages?: boolean;
 }
 
 export interface AlertEvent {
   id: string;
   sensorId: string;
   roomName: string;
-  type: "min_temp" | "max_temp" | "min_humidity" | "max_humidity" | "offline";
+  type: "min_temp" | "max_temp" | "min_humidity" | "max_humidity" | "offline" | "battery_low";
   value: number;
   threshold: number;
   createdAt: string;

@@ -1,4 +1,4 @@
-// components/AddSensorModal.tsx v5.1
+// components/AddSensorModal.tsx v5.6
 // ELA Blue PUCK T/RHT: wybór urządzenia po nazwie + nasłuch reklam BLE, bez wymuszania CONNECT/GATT.
 
 import { useState } from "react";
@@ -22,6 +22,7 @@ type Step = "scan" | "configure" | "manual";
 interface Props { open: boolean; onOpenChange: (o: boolean) => void; onAdded?: () => void; }
 
 const hasReading = (data: DecodedData) => data.temperature !== undefined || data.humidity !== undefined || data.battery !== undefined || data.batteryVoltage !== undefined || data.rssi !== undefined;
+const normalizeBleName = (v?: string) => (v ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
 
 export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
   const [step, setStep] = useState<Step>("scan");
@@ -87,9 +88,10 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
     const id = source === "device" ? device?.id : (manualId.trim() || `manual-${name.replace(/\s+/g, "-").toLowerCase()}-${Date.now()}`);
     if (!name || !id) return null;
     const p = getProfile(profileId);
-    const existing = getSensors().find((s) => s.deviceId === id || (s.bluetoothName === name && name.startsWith("P ")));
+    const normalizedName = normalizeBleName(name);
+    const existing = getSensors().find((s) => s.deviceId === id || normalizeBleName(s.bluetoothName) === normalizedName || (normalizedName.startsWith("PT") && normalizeBleName(s.bluetoothName).includes(normalizedName)));
     if (existing) {
-      toast.warning(`Ten czujnik jest już dodany: ${existing.roomName} · ${existing.bluetoothName}`);
+      toast.warning(`Ten czujnik jest już dodany jako: ${existing.roomName} · ${existing.bluetoothName}. Otwórz go i użyj „Nasłuchuj BLE”.`);
       return null;
     }
     const now = hasReading(liveData) ? new Date().toISOString() : undefined;

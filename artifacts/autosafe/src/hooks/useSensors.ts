@@ -1,13 +1,20 @@
-// hooks/useSensors.ts v5.4 — Nasłuch BLE używa skanu po nazwie, zapamiętuje baterię/wilgotność i odświeża status online
+// hooks/useSensors.ts v5.6 — monitoruj wszystkie, kalibracja, alerty, stabilny online/offline
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DecodedData, Sensor } from "@/types/sensor";
 import { getTempZone } from "@/types/sensor";
-import { addMeasurement, deleteSensor as storageDelete, getSensors, upsertSensor } from "@/services/storageService";
-import { cacheGrantedDevices, getCachedDevice, reconnectSensor, startAdvWatch, stopAdvWatch, stopNameScan } from "@/services/bluetoothService";
+import { addAlert, addMeasurement, deleteSensor as storageDelete, getSensors, getSettings, upsertSensor } from "@/services/storageService";
+import { cacheGrantedDevices, getCachedDevice, reconnectSensor, startAdvWatch, stopAdvWatch, stopNameScan, stopAllBleActivity } from "@/services/bluetoothService";
 import { getProfile } from "@/services/sensorProfiles";
 
 const STALE_MS = 120_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const applyCalibration = (sensor: Sensor, data: DecodedData): DecodedData => ({
+  ...data,
+  temperature: data.temperature != null ? +(data.temperature + (sensor.temperatureOffset ?? 0)).toFixed(2) : undefined,
+  humidity: data.humidity != null ? Math.max(0, Math.min(100, +(data.humidity + (sensor.humidityOffset ?? 0)).toFixed(2))) : undefined,
+});
 
 export function useSensors() {
   const [sensors, setSensors] = useState<Sensor[]>(() => getSensors());
@@ -23,18 +30,40 @@ export function useSensors() {
 
   const safeSetSensors = useCallback(() => {
     if (!isMounted.current) return;
-    setTimeout(() => {
-      if (isMounted.current) setSensors(getSensors());
-    }, 0);
+    setTimeout(() => { if (isMounted.current) setSensors(getSensors()); }, 0);
   }, []);
 
   const refresh = useCallback(() => setRev((r) => r + 1), []);
 
-  const applyBleData = useCallback((sensorId: string, data: DecodedData, detectedProfileId?: string | null) => {
+  const maybeCreateAlerts = useCallback((s: Sensor) => {
+    if (s.alertMuted) return;
+    const now = new Date().toISOString();
+    if (s.lastTemperature != null && s.minTempAlert != null && s.lastTemperature < s.minTempAlert) {
+      addAlert({ id: `${s.id}-min-temp-${Date.now()}`, sensorId: s.id, roomName: s.roomName, type: "min_temp", value: s.lastTemperature, threshold: s.minTempAlert, createdAt: now, acknowledged: false });
+    }
+    if (s.lastTemperature != null && s.maxTempAlert != null && s.lastTemperature > s.maxTempAlert) {
+      addAlert({ id: `${s.id}-max-temp-${Date.now()}`, sensorId: s.id, roomName: s.roomName, type: "max_temp", value: s.lastTemperature, threshold: s.maxTempAlert, createdAt: now, acknowledged: false });
+    }
+    if (s.lastHumidity != null && s.minHumidityAlert != null && s.lastHumidity < s.minHumidityAlert) {
+      addAlert({ id: `${s.id}-min-hum-${Date.now()}`, sensorId: s.id, roomName: s.roomName, type: "min_humidity", value: s.lastHumidity, threshold: s.minHumidityAlert, createdAt: now, acknowledged: false });
+    }
+    if (s.lastHumidity != null && s.maxHumidityAlert != null && s.lastHumidity > s.maxHumidityAlert) {
+      addAlert({ id: `${s.id}-max-hum-${Date.now()}`, sensorId: s.id, roomName: s.roomName, type: "max_humidity", value: s.lastHumidity, threshold: s.maxHumidityAlert, createdAt: now, acknowledged: false });
+    }
+    if (s.batteryLevel != null && s.batteryLevel < 15) {
+      addAlert({ id: `${s.id}-battery-${Date.now()}`, sensorId: s.id, roomName: s.roomName, type: "battery_low", value: s.batteryLevel, threshold: 15, createdAt: now, acknowledged: false });
+    }
+    if (s.batteryVoltage != null && s.batteryVoltage < 2400) {
+      addAlert({ id: `${s.id}-battery-mv-${Date.now()}`, sensorId: s.id, roomName: s.roomName, type: "battery_low", value: s.batteryVoltage, threshold: 2400, createdAt: now, acknowledged: false });
+    }
+  }, []);
+
+  const applyBleData = useCallback((sensorId: string, dataIn: DecodedData, detectedProfileId?: string | null) => {
     const now = new Date().toISOString();
     const current = getSensors().find((s) => s.id === sensorId || s.deviceId === sensorId);
     if (!current) return;
 
+    const data = applyCalibration(current, dataIn);
     const updated: Sensor = {
       ...current,
       profileId: detectedProfileId && detectedProfileId !== current.profileId ? detectedProfileId : (data.humidity !== undefined ? "ela-blue-puck-rht" : current.profileId),
@@ -49,34 +78,48 @@ export function useSensors() {
       rawManufacturerData: data.rawManufacturerData ?? current.rawManufacturerData,
       bleDebug: data.bleDebug ?? current.bleDebug,
       lastReadAt: now,
+      lastTemperatureReadAt: data.temperature !== undefined ? now : current.lastTemperatureReadAt,
+      lastHumidityReadAt: data.humidity !== undefined ? now : current.lastHumidityReadAt,
+      lastBatteryReadAt: (data.battery !== undefined || data.batteryVoltage !== undefined) ? now : current.lastBatteryReadAt,
       status: "connected",
     };
     upsertSensor(updated);
+    maybeCreateAlerts(updated);
 
-    if (data.temperature !== undefined) {
+    if (updated.lastTemperature !== undefined || updated.lastHumidity !== undefined) {
       addMeasurement({
         id: `${current.id}-${Date.now()}`,
         sensorId: current.id,
         roomName: current.roomName,
-        temperature: data.temperature,
-        humidity: data.humidity ?? current.lastHumidity,
-        pressure: data.pressure ?? current.lastPressure,
-        rssi: data.rssi ?? current.lastRssi,
-        batteryLevel: data.battery ?? current.batteryLevel,
+        bluetoothName: current.bluetoothName,
+        temperature: updated.lastTemperature ?? 0,
+        humidity: updated.lastHumidity,
+        pressure: updated.lastPressure,
+        rssi: updated.lastRssi,
+        batteryLevel: updated.batteryLevel,
+        batteryVoltage: updated.batteryVoltage,
         createdAt: now,
       });
     }
     safeSetSensors();
-  }, [safeSetSensors]);
+  }, [maybeCreateAlerts, safeSetSensors]);
 
-  // Sync z localStorage i timeout offline
   useEffect(() => {
     const update = () => {
+      const now = Date.now();
+      const settings = getSettings();
       const list = getSensors().map((s) => {
         if (s.isDemo || !s.lastReadAt || s.status === "pending") return s;
-        const stale = Date.now() - new Date(s.lastReadAt).getTime() > STALE_MS;
-        if (stale && s.status === "connected") return { ...s, status: "disconnected" as const };
+        const stale = now - new Date(s.lastReadAt).getTime() > STALE_MS;
+        if (stale && s.status === "connected") {
+          const minutes = s.offlineAlertMinutes ?? 30;
+          if (!s.alertMuted && now - new Date(s.lastReadAt).getTime() > minutes * 60_000) {
+            addAlert({ id: `${s.id}-offline-${now}`, sensorId: s.id, roomName: s.roomName, type: "offline", value: Math.round((now - new Date(s.lastReadAt).getTime()) / 60_000), threshold: minutes, createdAt: new Date().toISOString(), acknowledged: false });
+          }
+          return { ...s, status: "disconnected" as const };
+        }
         if (!stale && (s.status === "disconnected" || s.status === "scanning" || s.status === "error")) return { ...s, status: "connected" as const };
+        if (settings.autoStartMonitor && getProfile(s.profileId)?.source === "advertisement" && !s.isDemo && s.status !== "scanning") return { ...s, status: s.status };
         return s;
       });
       list.forEach((s) => upsertSensor(s));
@@ -85,30 +128,27 @@ export function useSensors() {
     update();
     const handler = () => update();
     window.addEventListener("storage", handler);
+    window.addEventListener("autosafe:data-changed", handler as EventListener);
     const interval = setInterval(update, 3000);
-    return () => { window.removeEventListener("storage", handler); clearInterval(interval); };
+    return () => { window.removeEventListener("storage", handler); window.removeEventListener("autosafe:data-changed", handler as EventListener); clearInterval(interval); };
   }, [rev]);
 
-  // Startuj nasłuch dla urządzeń, które są nadal w cache albo zostały odzyskane przez getDevices().
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
       await cacheGrantedDevices().catch(() => []);
       if (cancelled) return;
       const advSensors = getSensors().filter((s) => !s.isDemo && getProfile(s.profileId)?.source === "advertisement" && !watchedIds.current.has(s.id));
-
       advSensors.forEach((sensor) => {
         const device = getCachedDevice(sensor.deviceId);
         if (!device) return;
         watchedIds.current.add(sensor.id);
         if (sensor.status === "unknown" || sensor.status === "disconnected") upsertSensor({ ...sensor, status: "pending" });
-
         startAdvWatch(
           device,
           sensor.profileId,
           (result) => applyBleData(sensor.id, result.data, result.detectedProfileId),
           (err) => {
-            console.warn(`BLE adv error (${sensor.roomName}):`, err.message);
             const current = getSensors().find((s) => s.id === sensor.id);
             if (current && current.status !== "connected") upsertSensor({ ...current, status: "error", bleDebug: err.message });
             safeSetSensors();
@@ -133,55 +173,81 @@ export function useSensors() {
 
   const listen = useCallback(async (s: Sensor) => {
     const before = getSensors().find((x) => x.id === s.id) ?? s;
-    upsertSensor({
-      ...before,
-      status: "scanning",
-      bleDebug: `Nasłuch BLE aktywny — szukam ${before.bluetoothName || before.roomName} po nazwie, bez ponownego wybierania`
-    });
+    upsertSensor({ ...before, status: "scanning", bleDebug: `Nasłuch BLE aktywny — szukam ${before.bluetoothName || before.roomName} po nazwie` });
     safeSetSensors();
 
     const ok = await reconnectSensor(s, (result) => applyBleData(s.id, result.data, result.detectedProfileId), (e) => {
       const current = getSensors().find((x) => x.id === s.id);
       if (!current) return;
       const msg = e.message;
-      const isInfo =
-        msg.includes("Brak cache Chrome") ||
-        msg.includes("Nasłuch BLE aktywny") ||
-        msg.includes("uruchamiam skan") ||
-        msg.includes("wybierz czujnik ponownie") ||
-        msg.includes("Otwórz okno Bluetooth") ||
-        msg.includes("Wybrano") ||
-        msg.includes("Fallback") ||
-        msg.includes("skanuję reklamy") ||
-        msg.includes("automatyczny scan") ||
-        msg.includes("Automatyczny scan") ||
-        msg.includes("skan reklam BLE");
+      const isInfo = msg.includes("Nasłuch") || msg.includes("skan") || msg.includes("Wybrano") || msg.includes("Fallback") || msg.includes("requestLEScan");
       upsertSensor({ ...current, status: isInfo ? "scanning" : "error", bleDebug: msg });
       safeSetSensors();
     }, { forcePicker: true });
 
     const current = getSensors().find((x) => x.id === s.id);
     if (current && current.status !== "connected") {
-      upsertSensor({
-        ...current,
-        status: ok ? "scanning" : "error",
-        bleDebug: ok
-          ? (current.bleDebug || `Nasłuch BLE aktywny — czekam na kolejną reklamę ${current.bluetoothName}`)
-          : (current.bleDebug || "Nie udało się uruchomić nasłuchu BLE.")
-      });
+      upsertSensor({ ...current, status: ok ? "scanning" : "error", bleDebug: current.bleDebug || (ok ? `Nasłuch BLE aktywny — czekam na ${current.bluetoothName}` : "Nie udało się uruchomić nasłuchu BLE.") });
       safeSetSensors();
     }
     return ok;
   }, [applyBleData, safeSetSensors]);
 
+  const listenAll = useCallback(async () => {
+    const targets = getSensors().filter((s) => !s.isDemo && getProfile(s.profileId)?.source === "advertisement");
+    if (!targets.length) return false;
+    targets.forEach((s) => upsertSensor({ ...s, status: "scanning", bleDebug: `Monitoring zbiorczy BLE — szukam ${s.bluetoothName}` }));
+    safeSetSensors();
+    let any = false;
+    for (const s of targets) {
+      try {
+        const ok = await reconnectSensor(s, (result) => applyBleData(s.id, result.data, result.detectedProfileId), (e) => {
+          const current = getSensors().find((x) => x.id === s.id);
+          if (current && current.status !== "connected") upsertSensor({ ...current, status: "scanning", bleDebug: e.message });
+        }, { forcePicker: false });
+        any = any || ok;
+        await sleep(150);
+      } catch { /* next */ }
+    }
+    safeSetSensors();
+    return any;
+  }, [applyBleData, safeSetSensors]);
+
+  const stopMonitoringAll = useCallback(() => {
+    stopAllBleActivity();
+    const now = Date.now();
+    getSensors().forEach((s) => {
+      if (s.isDemo) return;
+      const fresh = s.lastReadAt && now - new Date(s.lastReadAt).getTime() < STALE_MS;
+      upsertSensor({ ...s, status: fresh ? "connected" : s.lastReadAt ? "disconnected" : "pending", bleDebug: fresh ? s.bleDebug : "Monitoring zatrzymany — uruchom ponownie przyciskiem Monitoruj." });
+    });
+    safeSetSensors();
+  }, [safeSetSensors]);
+
   const alertSensors = sensors.filter((s) => {
-    if (s.alertMuted || s.lastTemperature == null) return false;
-    const zone = getTempZone(s.lastTemperature, s.minTempAlert, s.maxTempAlert);
-    return zone === "danger" || zone === "hot" || zone === "cold" || zone === "frozen";
+    if (s.alertMuted) return false;
+    if (s.lastTemperature != null) {
+      const zone = getTempZone(s.lastTemperature, s.minTempAlert, s.maxTempAlert);
+      if (zone === "danger" || zone === "hot" || zone === "cold" || zone === "frozen") return true;
+    }
+    if (s.lastHumidity != null && ((s.minHumidityAlert != null && s.lastHumidity < s.minHumidityAlert) || (s.maxHumidityAlert != null && s.lastHumidity > s.maxHumidityAlert))) return true;
+    if (s.batteryLevel != null && s.batteryLevel < 15) return true;
+    if (s.batteryVoltage != null && s.batteryVoltage < 2400) return true;
+    return false;
   });
 
-  const pinnedSensors = sensors.filter((s) => s.isPinned);
-  const unpinnedSensors = sensors.filter((s) => !s.isPinned);
+  const sorted = [...sensors].sort((a, b) => {
+    const pa = a.isPinned ? 0 : 1;
+    const pb = b.isPinned ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    const oa = a.status === "connected" ? 0 : a.status === "scanning" ? 1 : 2;
+    const ob = b.status === "connected" ? 0 : b.status === "scanning" ? 1 : 2;
+    if (oa !== ob) return oa - ob;
+    return (b.lastReadAt ?? "").localeCompare(a.lastReadAt ?? "");
+  });
 
-  return { sensors, upsert, remove, refresh, listen, alertSensors, pinnedSensors, unpinnedSensors };
+  const pinnedSensors = sorted.filter((s) => s.isPinned);
+  const unpinnedSensors = sorted.filter((s) => !s.isPinned);
+
+  return { sensors: sorted, upsert, remove, refresh, listen, listenAll, stopMonitoringAll, alertSensors, pinnedSensors, unpinnedSensors };
 }
