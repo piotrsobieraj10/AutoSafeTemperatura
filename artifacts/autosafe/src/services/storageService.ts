@@ -1,9 +1,6 @@
+// storageService.ts v2
 import type { AlertEvent, AppSettings, Measurement, Sensor } from "@/types/sensor";
-import { notifyThemeChanged } from "./themeService";
-
 export type { AppSettings } from "@/types/sensor";
-
-export const STORAGE_EVENT = "autosafe-temp-storage-change";
 
 export const K = {
   SENSORS:      "thermo.v2.sensors",
@@ -12,73 +9,30 @@ export const K = {
   ALERTS:       "thermo.v2.alerts",
 };
 
-const LEGACY_KEYS = {
-  SENSORS_V1:      "thermo.sensors.v1",
-  MEASUREMENTS_V1: "thermo.measurements.v1",
-  SETTINGS_V1:     "thermo.settings.v1",
+export const STORAGE_EVENT = "autosafe-temp-storage-change";
+export const notifyStorageChanged = () => {
+  try { window.dispatchEvent(new Event(STORAGE_EVENT)); } catch {}
 };
 
 const MAX_MEASUREMENTS = 20_000;
 const MAX_ALERTS       = 500;
 
-const isBrowser = () => typeof window !== "undefined" && typeof localStorage !== "undefined";
-
-export const notifyStorageChanged = () => {
-  if (!isBrowser()) return;
-  window.dispatchEvent(new Event(STORAGE_EVENT));
-};
-
 const read = <T>(key: string, fb: T): T => {
-  if (!isBrowser()) return fb;
-  try {
-    const r = localStorage.getItem(key);
-    return r ? JSON.parse(r) : fb;
-  } catch {
-    return fb;
-  }
+  try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fb; }
+  catch { return fb; }
 };
 
 const write = (key: string, val: unknown) => {
-  if (!isBrowser()) return;
-  try {
-    localStorage.setItem(key, JSON.stringify(val));
-    notifyStorageChanged();
-  } catch (e) {
+  try { localStorage.setItem(key, JSON.stringify(val)); }
+  catch (e) {
     if (e instanceof DOMException && e.name === "QuotaExceededError") {
+      // Przytnij pomiary o połowę i spróbuj ponownie
       const ms = getMeasurements().slice(-Math.floor(MAX_MEASUREMENTS / 2));
       localStorage.setItem(K.MEASUREMENTS, JSON.stringify(ms));
-      try {
-        localStorage.setItem(key, JSON.stringify(val));
-        notifyStorageChanged();
-      } catch {}
+      try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
     }
   }
 };
-
-export const migrateLegacyStorage = () => {
-  if (!isBrowser()) return;
-
-  const hasV2Settings = localStorage.getItem(K.SETTINGS) != null;
-  const legacySettings = localStorage.getItem(LEGACY_KEYS.SETTINGS_V1);
-  if (!hasV2Settings && legacySettings) {
-    try {
-      const parsed = JSON.parse(legacySettings) as Partial<AppSettings> & { theme?: string };
-      const rawTheme = String(parsed.theme ?? "");
-      const theme = rawTheme === "auto" ? "system" : parsed.theme;
-      localStorage.setItem(K.SETTINGS, JSON.stringify({ ...parsed, theme }));
-    } catch {}
-  }
-
-  const hasV2Sensors = localStorage.getItem(K.SENSORS) != null;
-  const legacySensors = localStorage.getItem(LEGACY_KEYS.SENSORS_V1);
-  if (!hasV2Sensors && legacySensors) localStorage.setItem(K.SENSORS, legacySensors);
-
-  const hasV2Measurements = localStorage.getItem(K.MEASUREMENTS) != null;
-  const legacyMeasurements = localStorage.getItem(LEGACY_KEYS.MEASUREMENTS_V1);
-  if (!hasV2Measurements && legacyMeasurements) localStorage.setItem(K.MEASUREMENTS, legacyMeasurements);
-};
-
-migrateLegacyStorage();
 
 // ── Sensors ─────────────────────────────────────────────────
 export const getSensors     = (): Sensor[] => read<Sensor[]>(K.SENSORS, []);
@@ -142,7 +96,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   demoMode:          false,
   theme:             "system",
   tempUnit:          "C",
-  scanDuration:      15_000,
+  scanDuration:      10_000,
   pollingInterval:   30_000,
   alertSound:        false,
   alertVibration:    true,
@@ -151,44 +105,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const getSettings  = (): AppSettings => ({ ...DEFAULT_SETTINGS, ...read<Partial<AppSettings>>(K.SETTINGS, {}) });
-export const saveSettings = (s: AppSettings) => {
-  write(K.SETTINGS, s);
-  notifyThemeChanged();
-};
+export const saveSettings = (s: AppSettings) => write(K.SETTINGS, s);
 export const patchSettings = (patch: Partial<AppSettings>) => saveSettings({ ...getSettings(), ...patch });
-
-// ── Backup / import / export ─────────────────────────────────
-export const exportLocalData = () => ({
-  version: 2,
-  exportedAt: new Date().toISOString(),
-  settings: getSettings(),
-  sensors: getSensors(),
-  measurements: getMeasurements(),
-  alerts: getAlerts(),
-});
-
-export const importLocalData = (payload: unknown) => {
-  const data = payload as Partial<ReturnType<typeof exportLocalData>>;
-  if (data.settings) saveSettings({ ...DEFAULT_SETTINGS, ...data.settings });
-  if (Array.isArray(data.sensors)) saveSensors(data.sensors);
-  if (Array.isArray(data.measurements)) write(K.MEASUREMENTS, data.measurements.slice(-MAX_MEASUREMENTS));
-  if (Array.isArray(data.alerts)) write(K.ALERTS, data.alerts.slice(-MAX_ALERTS));
-  notifyStorageChanged();
-};
-
-export const clearAllLocalData = () => {
-  if (!isBrowser()) return;
-  Object.values(K).forEach((key) => localStorage.removeItem(key));
-  Object.values(LEGACY_KEYS).forEach((key) => localStorage.removeItem(key));
-  notifyStorageChanged();
-  notifyThemeChanged();
-};
-
-export const measurementsToCsv = (rows = getMeasurements()): string => {
-  const header = ["createdAt", "sensorId", "roomName", "temperatureC", "humidity", "pressure", "rssi", "batteryLevel"];
-  const esc = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
-  return [header.join(","), ...rows.map((m) => [m.createdAt, m.sensorId, m.roomName, m.temperature, m.humidity, m.pressure, m.rssi, m.batteryLevel].map(esc).join(","))].join("\n");
-};
 
 // ── Helpers ──────────────────────────────────────────────────
 export const toDisplayTemp = (c: number, unit: "C" | "F") =>

@@ -2,7 +2,7 @@
 // types/sensor.ts v2 — rozszerzone typy dla wszystkich czujników
 // ============================================================
 
-export type SensorStatus = "connected" | "disconnected" | "scanning" | "error" | "unknown";
+export type SensorStatus = "connected" | "disconnected" | "scanning" | "pending" | "error" | "unknown";
 export type SensorSource = "ela-advertisement" | "gatt" | "ruuvi" | "govee" | "inkbird" | "demo";
 export type TempZone = "frozen" | "cold" | "cool" | "ok" | "warm" | "hot" | "danger" | "offline";
 
@@ -28,7 +28,11 @@ export interface Sensor {
   // Meta
   lastRssi?: number;
   batteryLevel?: number;
-  batteryVoltage?: number;    // mV — RuuviTag
+  batteryVoltage?: number;    // mV — RuuviTag / ELA
+  rawAdvertisementHex?: string;
+  rawServiceData?: string;
+  rawManufacturerData?: string;
+  bleDebug?: string;
   // Flagi
   isDemo?: boolean;
   isPinned?: boolean;
@@ -76,6 +80,10 @@ export interface DecodedData {
   battery?: number;
   batteryVoltage?: number;
   rssi?: number;
+  rawAdvertisementHex?: string;
+  rawServiceData?: string;
+  rawManufacturerData?: string;
+  bleDebug?: string;
 }
 
 export interface AppSettings {

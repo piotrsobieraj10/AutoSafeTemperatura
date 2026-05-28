@@ -5,12 +5,12 @@ import { Plus, AlertTriangle, TrendingDown, TrendingUp, Thermometer } from "luci
 import { SensorCard } from "@/components/SensorCard";
 import { AddSensorModal } from "@/components/AddSensorModal";
 import { useSensors } from "@/hooks/useSensors";
-import { formatTemp, getSettings, upsertSensor } from "@/services/storageService";
+import { formatTemp, getSettings } from "@/services/storageService";
 import { getTempZone } from "@/types/sensor";
 import { cn } from "@/lib/utils";
 
 export function DashboardPage() {
-  const { sensors, upsert, remove, alertSensors, refresh, pinnedSensors, unpinnedSensors } = useSensors();
+  const { sensors, upsert, alertSensors, refresh, listen, pinnedSensors, unpinnedSensors } = useSensors();
   const [addOpen, setAddOpen] = useState(false);
   const settings = getSettings();
 
@@ -89,7 +89,8 @@ export function DashboardPage() {
             {pinnedSensors.map((s) => (
               <SensorCard key={s.id} sensor={s}
                 onTogglePin={() => handlePin(s)}
-                onToggleMute={() => handleMute(s)} />
+                onToggleMute={() => handleMute(s)}
+                onListen={() => { listen(s); }} />
             ))}
           </div>
         </section>
@@ -124,7 +125,8 @@ export function DashboardPage() {
             {unpinnedSensors.map((s) => (
               <SensorCard key={s.id} sensor={s}
                 onTogglePin={() => handlePin(s)}
-                onToggleMute={() => handleMute(s)} />
+                onToggleMute={() => handleMute(s)}
+                onListen={() => { listen(s); }} />
             ))}
           </div>
         )}

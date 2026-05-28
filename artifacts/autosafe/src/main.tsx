@@ -1,26 +1,19 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import { DEFAULT_SETTINGS, K, migrateLegacyStorage } from "./services/storageService";
-import { applyTheme } from "./services/themeService";
 
-const bootTheme = () => {
+const themeBootScript = () => {
   try {
-    migrateLegacyStorage();
-    const raw = localStorage.getItem(K.SETTINGS);
-    const settings = raw ? JSON.parse(raw) : DEFAULT_SETTINGS;
-    applyTheme(settings.theme ?? "system");
-  } catch {
-    applyTheme("system");
-  }
+    const raw = localStorage.getItem("thermo.v2.settings");
+    const settings = raw ? JSON.parse(raw) : {};
+    const mode = settings.theme || "system";
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const dark = mode === "dark" || (mode === "system" && prefersDark);
+    document.documentElement.classList.toggle("dark", dark);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  } catch (_) { /* ignore boot theme errors */ }
 };
 
-bootTheme();
-
-if ("serviceWorker" in navigator && import.meta.env.PROD) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
-  });
-}
+themeBootScript();
 
 createRoot(document.getElementById("root")!).render(<App />);

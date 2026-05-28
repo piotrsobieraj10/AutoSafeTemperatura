@@ -7,11 +7,11 @@ import {
   Activity, BatteryFull, BatteryLow, BatteryMedium,
   CircleDot, Droplets, Gauge, Leaf, Radio,
   Thermometer, ThermometerSnowflake, ThermometerSun,
-  Wind, Wifi, WifiOff, Pin, Bell, BellOff,
+  Wind, Wifi, WifiOff, Pin, Bell, BellOff, RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface Props { sensor: Sensor; onClick?: () => void; onTogglePin?: () => void; onToggleMute?: () => void; }
+interface Props { sensor: Sensor; onClick?: () => void; onTogglePin?: () => void; onToggleMute?: () => void; onListen?: () => void; }
 
 const ZONE_GRADIENT: Record<TempZone, string> = {
   frozen: "bg-gradient-frozen", cold:   "bg-gradient-cold",
@@ -57,9 +57,10 @@ function formatRelTime(iso?: string): string {
   return new Date(iso).toLocaleDateString("pl-PL", { day:"2-digit", month:"short" });
 }
 
-export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute }: Props) {
+export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute, onListen }: Props) {
   const settings = getSettings();
   const zone = getTempZone(sensor.lastTemperature, sensor.minTempAlert, sensor.maxTempAlert);
+  const isWaiting = sensor.status === "pending" || sensor.status === "scanning";
   const isOffline = zone === "offline";
   const profile = getProfile(sensor.profileId);
   const ProfileIcon = PROFILE_ICON[profile?.icon ?? "thermometer"] ?? Thermometer;
@@ -82,6 +83,12 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute }: Props
 
       {/* Quick actions */}
       <div className="absolute right-3 top-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+        {onListen && !sensor.isDemo && (
+          <button onClick={(e) => { e.stopPropagation(); onListen(); }} title="Odśwież BLE / nasłuchuj reklam"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 backdrop-blur text-white/80 hover:bg-white/25 hover:text-white">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
           className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 backdrop-blur text-white/80 hover:bg-white/25 hover:text-white">
           <Pin className={cn("h-3.5 w-3.5", sensor.isPinned && "fill-current")} />
@@ -97,7 +104,7 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute }: Props
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold uppercase tracking-widest opacity-70 truncate">
-              {sensor.customName ?? profile?.name ?? "Czujnik"}
+              {sensor.bluetoothName || sensor.customName || profile?.name || "Czujnik"}
             </p>
             <h3 className="mt-1 text-[1.65rem] font-bold leading-none tracking-tight truncate">
               {sensor.roomName}
@@ -113,7 +120,7 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute }: Props
           {isOffline ? (
             <div className="flex items-center gap-2 opacity-60">
               {zone === "offline" ? <WifiOff className="h-5 w-5" /> : <ThermometerSnowflake className="h-5 w-5" />}
-              <span className="text-lg font-medium">Brak sygnału</span>
+              <span className="text-lg font-medium">{isWaiting ? "Oczekuje na odczyt" : "Brak sygnału"}</span>
             </div>
           ) : (
             <>
@@ -166,6 +173,9 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute }: Props
                 {sensor.batteryLevel}%
               </span>
             )}
+            {sensor.batteryVoltage != null && sensor.batteryLevel == null && (
+              <span className="flex items-center gap-1"><BatteryMedium className="h-3.5 w-3.5" />{sensor.batteryVoltage} mV</span>
+            )}
             {/* RSSI */}
             {sensor.lastRssi != null && (
               <span className="flex items-center gap-1">
@@ -181,6 +191,12 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute }: Props
             {formatRelTime(sensor.lastReadAt)}
           </span>
         </div>
+
+        {isWaiting && !sensor.lastTemperature && (
+          <div className="mt-3 rounded-2xl bg-white/15 px-3 py-2 text-xs font-medium text-white/80">
+            Czujnik zapisany — użyj „Odśwież BLE”, aby odebrać reklamę pomiarową.
+          </div>
+        )}
 
         {/* Demo badge */}
         {sensor.isDemo && (
