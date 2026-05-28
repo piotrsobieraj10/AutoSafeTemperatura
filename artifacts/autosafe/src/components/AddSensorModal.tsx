@@ -1,4 +1,7 @@
-// components/AddSensorModal.tsx v2
+// components/AddSensorModal.tsx v4
+// Naprawka: usuwa "acceptAllDevices" — teraz filtruje po serviceUUID
+// ELA Blue Puck T pojawia się z nazwą "P T EN xxxxxxx" na liście
+
 import { useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -7,13 +10,12 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Bluetooth, BatteryMedium, Gauge, Loader2, Radio, Thermometer, Droplets, Info, Wifi, WifiOff } from "lucide-react";
+import { Bluetooth, BatteryMedium, Gauge, Loader2, Radio, Thermometer, Droplets, Info, CheckCircle2 } from "lucide-react";
 import { scanForDevice, type BTDevice } from "@/services/bluetoothService";
 import { sensorProfiles, detectProfileByName, getProfile } from "@/services/sensorProfiles";
 import { upsertSensor } from "@/services/storageService";
 import type { DecodedData, Sensor } from "@/types/sensor";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 
 const ROOMS = ["Salon","Sypialnia","Kuchnia","Łazienka","Garaż","Kotłownia","Poddasze","Biuro","Piwnica","Korytarz","Serwer","Ogród","Szklarnia","Taras"];
 
@@ -22,53 +24,48 @@ type Step = "scan" | "configure";
 interface Props { open: boolean; onOpenChange: (o: boolean) => void; onAdded?: () => void; }
 
 export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
-  const [step, setStep]               = useState<Step>("scan");
-  const [scanning, setScanning]       = useState(false);
-  const [device, setDevice]           = useState<BTDevice | null>(null);
-  const [liveData, setLiveData]       = useState<DecodedData>({});
-  const [detectedProfileId, setDetectedProfileId] = useState<string | null>(null);
-  const [roomName, setRoomName]       = useState("Salon");
-  const [customRoom, setCustomRoom]   = useState("");
-  const [customName, setCustomName]   = useState("");
-  const [profileId, setProfileId]     = useState("ela-blue-puck-t");
-  const [minTemp, setMinTemp]         = useState<string>("");
-  const [maxTemp, setMaxTemp]         = useState<string>("");
-  const [error, setError]             = useState<string | null>(null);
+  const [step, setStep]             = useState<Step>("scan");
+  const [scanning, setScanning]     = useState(false);
+  const [device, setDevice]         = useState<BTDevice | null>(null);
+  const [liveData, setLiveData]     = useState<DecodedData>({});
+  const [detectedProfile, setDetectedProfile] = useState<string | null>(null);
+  const [roomName, setRoomName]     = useState("Salon");
+  const [customRoom, setCustomRoom] = useState("");
+  const [customName, setCustomName] = useState("");
+  const [profileId, setProfileId]   = useState("ela-blue-puck-t");
+  const [minTemp, setMinTemp]       = useState("");
+  const [maxTemp, setMaxTemp]       = useState("");
+  const [error, setError]           = useState<string | null>(null);
+  const [gotTemp, setGotTemp]       = useState(false);
 
   const reset = () => {
-    setStep("scan"); setDevice(null); setLiveData({}); setDetectedProfileId(null);
-    setRoomName("Salon"); setCustomRoom(""); setCustomName(""); setProfileId("ela-blue-puck-t");
-    setMinTemp(""); setMaxTemp(""); setError(null); setScanning(false);
+    setStep("scan"); setDevice(null); setLiveData({}); setDetectedProfile(null);
+    setRoomName("Salon"); setCustomRoom(""); setCustomName("");
+    setProfileId("ela-blue-puck-t"); setMinTemp(""); setMaxTemp("");
+    setError(null); setScanning(false); setGotTemp(false);
   };
 
   const handleScan = async () => {
     setError(null);
     setScanning(true);
     try {
-      let firstData = false;
-      const dev = await scanForDevice(
+      let moved = false;
+      await scanForDevice(
         ({ device: d, detectedProfileId: pid, data }) => {
-          if (!firstData) {
-            firstData = true;
+          if (!moved) {
+            moved = true;
             setDevice(d);
-            setLiveData(data);
-            setDetectedProfileId(pid);
+            setDetectedProfile(pid);
             setProfileId(pid ?? detectProfileByName(d.name) ?? "ela-blue-puck-t");
             setStep("configure");
-          } else {
+          }
+          if (data.temperature !== undefined) {
             setLiveData((prev) => ({ ...prev, ...data }));
+            setGotTemp(true);
           }
         },
         (e) => setError(e.message)
       );
-
-      if (dev && !firstData) {
-        setDevice(dev);
-        const pid = detectProfileByName(dev.name);
-        setProfileId(pid ?? "ela-blue-puck-t");
-        setDetectedProfileId(pid);
-        setStep("configure");
-      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Błąd skanowania.";
       if (!msg.toLowerCase().includes("cancel") && !msg.toLowerCase().includes("user")) {
@@ -86,7 +83,7 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
     const p = getProfile(profileId);
     const sensor: Sensor = {
       id:              device.id,
-      bluetoothName:   device.name ?? "BLE Sensor",
+      bluetoothName:   device.name ?? "ELA Blue Puck T",
       deviceId:        device.id,
       roomName:        finalRoom,
       customName:      customName || undefined,
@@ -97,7 +94,6 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
       lastHumidity:    liveData.humidity,
       lastPressure:    liveData.pressure,
       batteryLevel:    liveData.battery,
-      batteryVoltage:  liveData.batteryVoltage,
       lastRssi:        liveData.rssi,
       lastReadAt:      liveData.temperature ? new Date().toISOString() : undefined,
       minTempAlert:    minTemp !== "" ? +minTemp : undefined,
@@ -120,41 +116,21 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
           </DialogTitle>
           <DialogDescription>
             {step === "scan"
-              ? "Obsługiwane: ELA, RuuviTag, Govee, Inkbird, SensorPush, Xiaomi i inne GATT."
-              : `Urządzenie: ${device?.name ?? device?.id}`}
+              ? "ELA Blue Puck T, RuuviTag, Govee, Inkbird, SensorPush, Xiaomi."
+              : `${device?.name ?? device?.id}`}
           </DialogDescription>
         </DialogHeader>
 
-        {/* ── SCAN STEP ── */}
+        {/* ── SCAN ── */}
         {step === "scan" && (
           <div className="space-y-4">
-            {/* Supported devices grid */}
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {[
-                { name: "ELA Blue Puck T", icon: <Radio className="h-4 w-4" />, badge: "Advertisement" },
-                { name: "RuuviTag",        icon: <Gauge className="h-4 w-4" />, badge: "Temp+Hum+Press" },
-                { name: "Govee H5074",     icon: <Thermometer className="h-4 w-4" />, badge: "Advertisement" },
-                { name: "Inkbird IBS-TH2", icon: <Thermometer className="h-4 w-4" />, badge: "GATT" },
-                { name: "SensorPush HT1",  icon: <Droplets className="h-4 w-4" />, badge: "GATT" },
-                { name: "Xiaomi LYWSD03",  icon: <Thermometer className="h-4 w-4" />, badge: "GATT" },
-              ].map((d) => (
-                <div key={d.name} className="flex flex-col gap-1 rounded-xl border bg-muted/40 p-3">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    {d.icon} {d.name}
-                  </div>
-                  <Badge variant="secondary" className="text-[10px] w-fit">{d.badge}</Badge>
-                </div>
-              ))}
-            </div>
-
             <Alert className="border-primary/30 bg-primary/5">
               <Info className="h-4 w-4 text-primary" />
-              <AlertTitle className="text-sm text-primary">ELA / RuuviTag / Govee</AlertTitle>
-              <AlertDescription className="text-xs mt-1">
-                Dla czujników Advertisement włącz w Chrome:
-                <code className="ml-1 rounded bg-background px-1.5 py-0.5 font-mono text-[11px] border">
-                  chrome://flags/#enable-web-bluetooth-scanning → Enabled
-                </code>
+              <AlertTitle className="text-sm text-primary">ELA Blue Puck T</AlertTitle>
+              <AlertDescription className="text-xs mt-1 space-y-1">
+                <p>Po kliknięciu Skanuj pojawi się lista urządzeń Bluetooth.</p>
+                <p>Wybierz urządzenie o nazwie <strong>P T EN xxxxxxx</strong>.</p>
+                <p className="text-muted-foreground">Temperatura pojawi się automatycznie po sparowaniu przez GATT.</p>
               </AlertDescription>
             </Alert>
 
@@ -168,46 +144,34 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
           </div>
         )}
 
-        {/* ── CONFIGURE STEP ── */}
+        {/* ── CONFIGURE ── */}
         {step === "configure" && device && (
           <div className="space-y-4">
-            {/* Device preview */}
+            {/* Device info */}
             <div className="rounded-2xl border bg-muted/30 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="font-semibold text-sm">{device.name ?? "BLE Sensor"}</div>
-                  <div className="text-xs text-muted-foreground font-mono truncate max-w-[220px]">{device.id}</div>
+                  <div className="font-semibold text-sm">{device.name ?? "ELA Blue Puck T"}</div>
+                  <div className="text-xs text-muted-foreground font-mono truncate max-w-[200px]">{device.id}</div>
                 </div>
-                {liveData.temperature != null && (
-                  <div className="flex items-center gap-1.5 rounded-xl bg-primary/10 px-3 py-2 text-primary">
-                    <Thermometer className="h-4 w-4" />
-                    <span className="font-bold">{liveData.temperature.toFixed(2)}°C</span>
+                {gotTemp ? (
+                  <div className="flex items-center gap-1.5 rounded-xl bg-green-500/10 px-3 py-2 text-green-600 dark:text-green-400">
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span className="font-bold">{liveData.temperature?.toFixed(2)}°C</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 rounded-xl bg-muted px-3 py-2 text-muted-foreground text-xs">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Oczekiwanie…
                   </div>
                 )}
               </div>
 
-              {/* Live meta */}
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                {liveData.humidity != null && (
-                  <span className="flex items-center gap-1"><Droplets className="h-3.5 w-3.5" />{liveData.humidity.toFixed(1)}%</span>
-                )}
-                {liveData.pressure != null && (
-                  <span className="flex items-center gap-1"><Gauge className="h-3.5 w-3.5" />{liveData.pressure.toFixed(1)} hPa</span>
-                )}
-                {liveData.battery != null && (
-                  <span className="flex items-center gap-1"><BatteryMedium className="h-3.5 w-3.5" />{liveData.battery}%</span>
-                )}
-                {liveData.rssi != null && (
-                  <span className="flex items-center gap-1">
-                    {liveData.rssi > -70 ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-                    {liveData.rssi} dBm
-                  </span>
-                )}
-                {detectedProfileId && (
-                  <Badge variant="secondary" className="text-[10px]">
-                    Auto-detect: {detectedProfileId}
-                  </Badge>
-                )}
+                {liveData.humidity  != null && <span className="flex items-center gap-1"><Droplets className="h-3.5 w-3.5" />{liveData.humidity.toFixed(1)}%</span>}
+                {liveData.pressure  != null && <span className="flex items-center gap-1"><Gauge className="h-3.5 w-3.5" />{liveData.pressure.toFixed(1)} hPa</span>}
+                {liveData.battery   != null && <span className="flex items-center gap-1"><BatteryMedium className="h-3.5 w-3.5" />{liveData.battery}%</span>}
+                {detectedProfile && <Badge variant="secondary" className="text-[10px]">Auto: {detectedProfile}</Badge>}
               </div>
             </div>
 
@@ -226,13 +190,11 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
               </div>
             </div>
 
-            {/* Custom name */}
             <div className="space-y-1.5">
-              <Label>Opis czujnika</Label>
+              <Label>Opis</Label>
               <Input placeholder="np. przy oknie, pod sufitem…" value={customName} onChange={(e) => setCustomName(e.target.value)} />
             </div>
 
-            {/* Profile */}
             <div className="space-y-1.5">
               <Label>Profil dekodowania</Label>
               <Select value={profileId} onValueChange={setProfileId}>
@@ -240,17 +202,14 @@ export function AddSensorModal({ open, onOpenChange, onAdded }: Props) {
                 <SelectContent>
                   {sensorProfiles.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
-                      <div className="flex items-center gap-2">
-                        <span>{p.name}</span>
-                        <span className="text-xs text-muted-foreground">({p.manufacturer})</span>
-                      </div>
+                      <span>{p.name}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">({p.manufacturer})</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Alerts */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Min °C (alert)</Label>
