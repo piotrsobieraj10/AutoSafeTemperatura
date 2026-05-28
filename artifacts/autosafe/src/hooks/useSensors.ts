@@ -1,4 +1,4 @@
-// hooks/useSensors.ts v5.1 — nasłuch BLE advertising dla ELA Blue PUCK bez GATT CONNECT
+// hooks/useSensors.ts v5.3 — ręczny Nasłuch BLE wymusza ponowny wybór czujnika w Chrome
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DecodedData, Sensor } from "@/types/sensor";
@@ -145,10 +145,13 @@ export function useSensors() {
         msg.includes("Brak cache Chrome") ||
         msg.includes("Nasłuch BLE aktywny") ||
         msg.includes("uruchamiam skan") ||
-        msg.includes("wybierz czujnik ponownie");
+        msg.includes("wybierz czujnik ponownie") ||
+        msg.includes("Otwórz okno Bluetooth") ||
+        msg.includes("Wybrano") ||
+        msg.includes("Fallback");
       upsertSensor({ ...current, status: isInfo ? "scanning" : "error", bleDebug: msg });
       safeSetSensors();
-    });
+    }, { forcePicker: true });
 
     const current = getSensors().find((x) => x.id === s.id);
     if (current && current.status !== "connected") {

@@ -1,4 +1,4 @@
-// components/SensorCard.tsx v5.2 — widoczny przycisk Nasłuchuj BLE na telefonie
+// components/SensorCard.tsx v5.3 — duży przycisk Nasłuchuj BLE otwiera wybór czujnika w Chrome
 import type { Sensor, TempZone } from "@/types/sensor";
 import { getTempZone, ZONE_LABELS } from "@/types/sensor";
 import { formatTemp, formatHumidity, formatPressure, getSettings } from "@/services/storageService";

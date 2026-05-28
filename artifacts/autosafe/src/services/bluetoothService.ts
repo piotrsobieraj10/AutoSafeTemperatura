@@ -1,10 +1,10 @@
-// bluetoothService.ts v5.2 — ELA Blue PUCK T/RHT przez BLE Advertising
+// bluetoothService.ts v5.3 — ELA Blue PUCK T/RHT przez BLE Advertising
 //
 // Kluczowa zmiana względem v5.1:
 // - aplikacja NIE kończy nasłuchu komunikatem „brak cache Chrome”,
-// - jeśli nie ma zapisanego BluetoothDevice z getDevices(), próbuje:
-//   1) requestLEScan + dopasowanie po nazwie Bluetooth, np. „P T EN 81F7F2”,
-//   2) fallback requestDevice, żeby użytkownik mógł ponownie wskazać czujnik,
+// - po kliknięciu Nasłuchuj BLE aplikacja otwiera ponowny wybór czujnika przez requestDevice,
+//   bo requestLEScan w Chrome/Replit potrafi pokazywać „aktywny”, ale nie oddawać ramek.
+// - requestLEScan zostaje tylko jako fallback diagnostyczny.
 // - dekodowanie działa na realnym formacie z nRF Connect:
 //   0x16 / UUID 0x2A6E = temperatura int16LE / 100
 //   0x16 / UUID 0x2A6F = wilgotność uint16LE / 100
@@ -63,10 +63,12 @@ interface BTGATTChar {
 }
 export interface BTAdvEvent extends Event {
   device: BTDevice;
+  name?: string | null;
   rssi?: number;
   txPower?: number;
   manufacturerData?: Map<number, DataView>;
   serviceData?: Map<string, DataView>;
+  uuids?: string[];
 }
 
 export type ScanMode = "ela" | "all";
@@ -137,6 +139,8 @@ const normalizeName = (value?: string | null) => (value ?? "")
   .replace(/[^A-Z0-9]+/g, "")
   .trim();
 
+const getAdvertisementName = (event: BTAdvEvent): string | null | undefined => event.name ?? event.device?.name;
+
 const uuidLooksLike = (uuid: string, shortHex: string) => uuid.toLowerCase().replace(/[^a-f0-9]/g, "").includes(shortHex.toLowerCase());
 
 const decodeTempValue = (dv: DataView): number | undefined => {
@@ -171,7 +175,8 @@ export const decodeAdvertisementEvent = (event: BTAdvEvent, hintProfileId?: stri
   const data: DecodedData = { rssi: event.rssi ?? undefined };
   const serviceParts: string[] = [];
   const manufacturerParts: string[] = [];
-  let profileId = hintProfileId ?? detectProfileByName(event.device?.name) ?? null;
+  const eventName = getAdvertisementName(event);
+  let profileId = hintProfileId ?? detectProfileByName(eventName) ?? detectProfileByName(event.device?.name) ?? null;
 
   if (event.serviceData) {
     for (const [uuid, view] of event.serviceData) {
@@ -217,7 +222,7 @@ export const decodeAdvertisementEvent = (event: BTAdvEvent, hintProfileId?: stri
   data.rawServiceData = serviceParts.join(" | ") || undefined;
   data.rawManufacturerData = manufacturerParts.join(" | ") || undefined;
   data.bleDebug = adDebug([
-    event.device?.name ? `name=${event.device.name}` : undefined,
+    eventName ? `name=${eventName}` : undefined,
     event.device?.id ? `id=${event.device.id}` : undefined,
     event.rssi != null ? `rssi=${event.rssi}` : undefined,
     data.temperature != null ? `temperature=${data.temperature}` : undefined,
@@ -412,21 +417,24 @@ export const startNameBasedElaScan = async (
   const targetName = sensor.bluetoothName;
 
   const handler = (event: BTAdvEvent) => {
-    if (!matchesSensorName(sensor, event.device?.name)) return;
+    const eventName = getAdvertisementName(event);
+    if (!matchesSensorName(sensor, eventName)) return;
     if (timeoutId) { clearTimeout(timeoutId); timeoutId = undefined; }
     if (event.device?.id) deviceCache.set(event.device.id, event.device);
     const decoded = decodeAdvertisementEvent(event, sensor.profileId);
     decoded.data.bleDebug = adDebug([
       decoded.data.bleDebug,
       `matchedByName=${targetName}`,
+      `eventName=${eventName ?? ""}`,
       "scan=requestLEScan",
+      !decoded.data.rawServiceData && !decoded.data.rawManufacturerData ? "event bez serviceData/manufacturerData" : undefined,
     ]);
     onData({ device: event.device, detectedProfileId: decoded.profileId ?? sensor.profileId, data: decoded.data });
   };
 
   try {
     bt.addEventListener("advertisementreceived", handler);
-    const scan = await bt.requestLEScan({ filters: ELA_NAME_FILTERS, keepRepeatedDevices: true });
+    const scan = await bt.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true });
     leScans.set(sensor.id, { scan, handler });
     timeoutId = setTimeout(() => {
       onError?.(new Error(`Nasłuch BLE aktywny, ale nie odebrano jeszcze ramki z ${targetName}. Zbliż telefon do czujnika albo wybierz czujnik ponownie.`));
@@ -451,15 +459,17 @@ const requestDeviceAgainAndWatch = async (
   try {
     const device = await bt.requestDevice(buildDeviceOptionsForSensor(sensor));
     if (!device?.id) return false;
-    if (!matchesSensorName(sensor, device.name) && sensor.bluetoothName) {
+    if (device.name && !matchesSensorName(sensor, device.name) && sensor.bluetoothName) {
       onError?.(new Error(`Wybrano ${device.name ?? "urządzenie"}, ale zapisany czujnik to ${sensor.bluetoothName}. Wybierz właściwy czujnik.`));
       return false;
     }
     deviceCache.set(device.id, device);
     if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
+      onError?.(new Error(`Wybrano ${device.name ?? sensor.bluetoothName}. Nasłuch BLE aktywny — czekam na advertisementreceived.`));
       await startAdvWatch(device, sensor.profileId, onData, onError);
       return true;
     }
+    onError?.(new Error("Ta wersja Chrome nie udostępnia watchAdvertisements dla wybranego urządzenia. Spróbuję GATT fallback, ale ELA zwykle nadaje dane w reklamach BLE."));
     await connectGATTWithNotifications(device, sensor.profileId, onData, onError);
     return true;
   } catch (e) {
@@ -474,15 +484,28 @@ const requestDeviceAgainAndWatch = async (
 export const reconnectSensor = async (
   sensor: Sensor,
   onData: ScanCallback,
-  onError?: (e: Error) => void
+  onError?: (e: Error) => void,
+  options?: { forcePicker?: boolean }
 ): Promise<boolean> => {
+  const isElaAdv = sensor.profileId.startsWith("ela-blue-puck") || getProfile(sensor.profileId)?.source === "advertisement";
+
+  // v5.3: przy ręcznym kliknięciu „Nasłuchuj BLE” NIE polegamy na cache Chrome ani samym requestLEScan.
+  // Otwieramy systemowe okno wyboru czujnika, bo tylko wtedy Chrome oddaje prawdziwy BluetoothDevice
+  // z uprawnieniem do watchAdvertisements(). To jest obecnie najpewniejsza metoda w PWA.
+  if (isElaAdv && options?.forcePicker) {
+    onError?.(new Error(`Otwórz okno Bluetooth i wybierz ${sensor.bluetoothName}. Po wyborze uruchomię watchAdvertisements().`));
+    const picked = await requestDeviceAgainAndWatch(sensor, onData, onError);
+    if (picked) return true;
+
+    onError?.(new Error(`Nie udało się użyć wyboru Bluetooth. Uruchamiam awaryjny szeroki scan reklam BLE po nazwie ${sensor.bluetoothName}.`));
+    return startNameBasedElaScan(sensor, onData, onError);
+  }
+
   let device = deviceCache.get(sensor.deviceId);
   if (!device) {
     const granted = await cacheGrantedDevices();
     device = granted.find((d) => d.id === sensor.deviceId || d.name === sensor.bluetoothName);
   }
-
-  const isElaAdv = sensor.profileId.startsWith("ela-blue-puck") || getProfile(sensor.profileId)?.source === "advertisement";
 
   if (device) {
     deviceCache.set(device.id, device);
@@ -497,13 +520,13 @@ export const reconnectSensor = async (
     return true;
   }
 
-  // v5.2: brak cache Chrome nie kończy pracy. Najpierw próbujemy skan po nazwie, potem ponowny wybór urządzenia.
   if (isElaAdv) {
-    onError?.(new Error(`Brak cache Chrome — uruchamiam skan reklam po nazwie ${sensor.bluetoothName}.`));
-    const scanStarted = await startNameBasedElaScan(sensor, onData, onError);
-    if (scanStarted) return true;
-    onError?.(new Error("Chrome nie udostępnia requestLEScan — wybierz czujnik ponownie w oknie Bluetooth."));
-    return requestDeviceAgainAndWatch(sensor, onData, onError);
+    onError?.(new Error(`Brak cache Chrome — wybierz ${sensor.bluetoothName} ponownie w oknie Bluetooth.`));
+    const picked = await requestDeviceAgainAndWatch(sensor, onData, onError);
+    if (picked) return true;
+
+    onError?.(new Error(`Fallback: requestLEScan po nazwie ${sensor.bluetoothName}.`));
+    return startNameBasedElaScan(sensor, onData, onError);
   }
 
   return requestDeviceAgainAndWatch(sensor, onData, onError);

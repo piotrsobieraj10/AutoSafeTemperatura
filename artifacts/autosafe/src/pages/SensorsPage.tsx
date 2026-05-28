@@ -1,4 +1,4 @@
-// routes/sensors.tsx v5.2 — diagnostyka BLE, requestLEScan i ponowny wybór czujnika ELA
+// routes/sensors.tsx v5.3 — Nasłuch BLE otwiera ponowny wybór czujnika, potem watchAdvertisements
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,9 +24,9 @@ export function SensorsPage() {
     upsert({ ...s, status: "scanning", bleDebug: `Nasłuch BLE aktywny — szukam ${s.bluetoothName}` });
     const ok = await listen(s);
     if (ok) {
-      toast.success("Nasłuch BLE aktywny. Jeśli nie było cache Chrome, aplikacja skanuje reklamy po nazwie albo poprosi o ponowny wybór czujnika.");
+      toast.success("Nasłuch BLE uruchomiony. Jeśli Chrome pokazał okno wyboru, wybierz dokładnie ten sam czujnik i poczekaj na pierwszą ramkę.");
     } else {
-      toast.warning("Nie udało się uruchomić nasłuchu. Kliknij ponownie i wybierz czujnik w oknie Bluetooth, jeśli Chrome o to poprosi.");
+      toast.warning("Nie udało się uruchomić nasłuchu. Kliknij ponownie i wybierz czujnik w oknie Bluetooth.");
     }
   };
 
@@ -99,7 +99,7 @@ export function SensorsPage() {
                 {!s.isDemo && (
                   <Button className="w-full" onClick={() => handleListen(s)}>
                     <RefreshCw className="mr-2 h-4 w-4" />
-                    Nasłuchuj BLE / odśwież reklamę
+                    Nasłuchuj BLE / wybierz czujnik
                   </Button>
                 )}
                 {s.status === "error" && s.bleDebug && (
