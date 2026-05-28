@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DecodedData, Sensor } from "@/types/sensor";
 import { getTempZone } from "@/types/sensor";
 import { addMeasurement, deleteSensor as storageDelete, getSensors, upsertSensor } from "@/services/storageService";
-import { cacheGrantedDevices, getCachedDevice, reconnectSensor, startAdvWatch, stopAdvWatch } from "@/services/bluetoothService";
+import { cacheGrantedDevices, getCachedDevice, reconnectSensor, startAdvWatch, stopAdvWatch, stopNameScan } from "@/services/bluetoothService";
 import { getProfile } from "@/services/sensorProfiles";
 
 const STALE_MS = 60_000;
@@ -122,20 +122,43 @@ export function useSensors() {
   const remove = useCallback((id: string) => {
     const current = getSensors().find((s) => s.id === id);
     stopAdvWatch(current?.deviceId ?? id);
+    stopNameScan(id);
     watchedIds.current.delete(id);
     storageDelete(id);
     safeSetSensors();
   }, [safeSetSensors]);
 
   const listen = useCallback(async (s: Sensor) => {
+    const before = getSensors().find((x) => x.id === s.id) ?? s;
+    upsertSensor({
+      ...before,
+      status: "scanning",
+      bleDebug: `Nasłuch BLE aktywny — szukam ${before.bluetoothName || before.roomName}`
+    });
+    safeSetSensors();
+
     const ok = await reconnectSensor(s, (result) => applyBleData(s.id, result.data), (e) => {
       const current = getSensors().find((x) => x.id === s.id);
-      if (current) upsertSensor({ ...current, status: "error", bleDebug: e.message });
+      if (!current) return;
+      const msg = e.message;
+      const isInfo =
+        msg.includes("Brak cache Chrome") ||
+        msg.includes("Nasłuch BLE aktywny") ||
+        msg.includes("uruchamiam skan") ||
+        msg.includes("wybierz czujnik ponownie");
+      upsertSensor({ ...current, status: isInfo ? "scanning" : "error", bleDebug: msg });
       safeSetSensors();
     });
-    if (ok) {
-      const current = getSensors().find((x) => x.id === s.id);
-      if (current && current.status !== "connected") upsertSensor({ ...current, status: "pending" });
+
+    const current = getSensors().find((x) => x.id === s.id);
+    if (current && current.status !== "connected") {
+      upsertSensor({
+        ...current,
+        status: ok ? "scanning" : "error",
+        bleDebug: ok
+          ? (current.bleDebug || `Nasłuch BLE aktywny — czekam na reklamę ${current.bluetoothName}`)
+          : (current.bleDebug || "Nie udało się uruchomić nasłuchu BLE.")
+      });
       safeSetSensors();
     }
     return ok;

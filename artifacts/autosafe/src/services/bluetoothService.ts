@@ -1,10 +1,14 @@
-// bluetoothService.ts v5.1 — ELA Blue PUCK T/RHT przez BLE Advertising
+// bluetoothService.ts v5.2 — ELA Blue PUCK T/RHT przez BLE Advertising
 //
-// Ustalony format z realnych ramek nRF Connect:
-// 02 01 06 | 05 16 6E 2A 1C 09 | 0E 09 50 ...
-// AD Type 0x16 + UUID 0x2A6E: int16LE / 100 = temperatura °C
-// AD Type 0x16 + UUID 0x2A6F: uint16LE / 100 = wilgotność %
-// AD Type 0xFF + Company ID 0x0757: ostatnie 2 bajty payloadu = bateria mV
+// Kluczowa zmiana względem v5.1:
+// - aplikacja NIE kończy nasłuchu komunikatem „brak cache Chrome”,
+// - jeśli nie ma zapisanego BluetoothDevice z getDevices(), próbuje:
+//   1) requestLEScan + dopasowanie po nazwie Bluetooth, np. „P T EN 81F7F2”,
+//   2) fallback requestDevice, żeby użytkownik mógł ponownie wskazać czujnik,
+// - dekodowanie działa na realnym formacie z nRF Connect:
+//   0x16 / UUID 0x2A6E = temperatura int16LE / 100
+//   0x16 / UUID 0x2A6F = wilgotność uint16LE / 100
+//   0xFF / Company 0x0757 = bateria z dwóch ostatnich bajtów payloadu jako uint16LE mV
 
 import type { DecodedData, Sensor } from "@/types/sensor";
 import {
@@ -18,11 +22,13 @@ import {
 } from "./sensorProfiles";
 
 interface NavWithBT extends Navigator { bluetooth?: BTAPI; }
-interface BTAPI {
+interface BTAPI extends EventTarget {
   requestDevice: (o: RequestDeviceOptions) => Promise<BTDevice>;
   getAvailability?: () => Promise<boolean>;
   getDevices?: () => Promise<BTDevice[]>;
-  requestLEScan?: (o?: RequestLEScanOptions) => Promise<{ active: boolean; stop: () => void }>;
+  requestLEScan?: (o?: RequestLEScanOptions) => Promise<BTLEScan>;
+  addEventListener: (t: "advertisementreceived", l: (e: BTAdvEvent) => void) => void;
+  removeEventListener: (t: "advertisementreceived", l: (e: BTAdvEvent) => void) => void;
 }
 interface RequestDeviceOptions {
   acceptAllDevices?: boolean;
@@ -35,6 +41,7 @@ interface RequestLEScanOptions {
   filters?: Array<{ services?: string[]; namePrefix?: string; name?: string }>;
   keepRepeatedDevices?: boolean;
 }
+interface BTLEScan { active: boolean; stop: () => void; }
 export interface BTDevice {
   id: string;
   name?: string | null;
@@ -57,6 +64,7 @@ interface BTGATTChar {
 export interface BTAdvEvent extends Event {
   device: BTDevice;
   rssi?: number;
+  txPower?: number;
   manufacturerData?: Map<number, DataView>;
   serviceData?: Map<string, DataView>;
 }
@@ -65,6 +73,7 @@ export type ScanMode = "ela" | "all";
 
 const deviceCache = new Map<string, BTDevice>();
 const advControllers = new Map<string, AbortController>();
+const leScans = new Map<string, { scan: BTLEScan; handler: (e: BTAdvEvent) => void }>();
 const getBT = (): BTAPI | undefined => (navigator as NavWithBT).bluetooth;
 
 const ELA_NAME_FILTERS = [
@@ -87,6 +96,8 @@ const OPTIONAL_SERVICES = [
   "0000fff0-0000-1000-8000-00805f9b34fb",
 ];
 
+const LE_SCAN_TIMEOUT_MS = 45_000;
+
 export const isBluetoothAvailable = async (): Promise<boolean> => {
   const bt = getBT();
   if (!bt) return false;
@@ -101,6 +112,11 @@ export const isAdvertisementScanSupported = (): boolean => {
   } catch { return false; }
 };
 
+export const isLEScanSupported = (): boolean => {
+  const bt = getBT();
+  return typeof bt?.requestLEScan === "function";
+};
+
 export interface ScanResult {
   device: BTDevice;
   detectedProfileId: string | null;
@@ -108,11 +124,18 @@ export interface ScanResult {
 }
 export type ScanCallback = (r: ScanResult) => void;
 
+const nowIso = () => new Date().toISOString();
+
 const dvToHex = (dv?: DataView): string | undefined => {
   if (!dv) return undefined;
   return Array.from(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength))
     .map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join("");
 };
+
+const normalizeName = (value?: string | null) => (value ?? "")
+  .toUpperCase()
+  .replace(/[^A-Z0-9]+/g, "")
+  .trim();
 
 const uuidLooksLike = (uuid: string, shortHex: string) => uuid.toLowerCase().replace(/[^a-f0-9]/g, "").includes(shortHex.toLowerCase());
 
@@ -141,6 +164,8 @@ const decodeBatteryFromElaManufacturer = (dv: DataView): Pick<DecodedData, "batt
     battery: Math.max(0, Math.min(100, Math.round(((mv - 2000) / 1200) * 100))),
   };
 };
+
+const adDebug = (parts: Array<string | undefined>) => parts.filter(Boolean).join("; ") || undefined;
 
 export const decodeAdvertisementEvent = (event: BTAdvEvent, hintProfileId?: string | null): { data: DecodedData; profileId: string | null } => {
   const data: DecodedData = { rssi: event.rssi ?? undefined };
@@ -191,12 +216,17 @@ export const decodeAdvertisementEvent = (event: BTAdvEvent, hintProfileId?: stri
 
   data.rawServiceData = serviceParts.join(" | ") || undefined;
   data.rawManufacturerData = manufacturerParts.join(" | ") || undefined;
-  data.bleDebug = [
+  data.bleDebug = adDebug([
     event.device?.name ? `name=${event.device.name}` : undefined,
+    event.device?.id ? `id=${event.device.id}` : undefined,
     event.rssi != null ? `rssi=${event.rssi}` : undefined,
+    data.temperature != null ? `temperature=${data.temperature}` : undefined,
+    data.humidity != null ? `humidity=${data.humidity}` : undefined,
+    data.batteryVoltage != null ? `batteryMv=${data.batteryVoltage}` : undefined,
     data.rawServiceData ? `serviceData=${data.rawServiceData}` : undefined,
     data.rawManufacturerData ? `manufacturerData=${data.rawManufacturerData}` : undefined,
-  ].filter(Boolean).join("; ") || undefined;
+    `ts=${nowIso()}`,
+  ]);
 
   return { data, profileId };
 };
@@ -210,6 +240,30 @@ export const cacheGrantedDevices = async (): Promise<BTDevice[]> => {
     return devices;
   } catch { return []; }
 };
+
+const buildDeviceOptionsForSensor = (sensor: Sensor): RequestDeviceOptions => {
+  const filters: Array<{ name?: string; namePrefix?: string }> = [];
+  if (sensor.bluetoothName) filters.push({ name: sensor.bluetoothName });
+  ELA_NAME_FILTERS.forEach((f) => filters.push(f));
+  return { filters, optionalServices: OPTIONAL_SERVICES, optionalManufacturerData: ALL_COMPANY_IDS };
+};
+
+const matchesSensorName = (sensor: Sensor, deviceName?: string | null): boolean => {
+  const target = normalizeName(sensor.bluetoothName);
+  const candidate = normalizeName(deviceName);
+  if (!target || !candidate) return false;
+  return candidate === target || candidate.includes(target) || target.includes(candidate);
+};
+
+const hasUsefulDecodedData = (data: DecodedData): boolean => (
+  data.temperature !== undefined ||
+  data.humidity !== undefined ||
+  data.battery !== undefined ||
+  data.batteryVoltage !== undefined ||
+  data.rssi !== undefined ||
+  Boolean(data.rawServiceData) ||
+  Boolean(data.rawManufacturerData)
+);
 
 // Główna funkcja wyboru urządzenia. Dla ELA najważniejszy jest watchAdvertisements, nie GATT.
 export const scanForDevice = async (
@@ -235,10 +289,9 @@ export const scanForDevice = async (
       onError?.(new Error(`Czujnik zapisany, ale nie udało się uruchomić nasłuchu reklam BLE: ${e instanceof Error ? e.message : String(e)}`));
     });
   } else {
-    onError?.(new Error("Przeglądarka nie udostępnia danych reklamowych BLE. Czujnik można zapisać, ale pełny odczyt może wymagać aplikacji Android."));
+    onError?.(new Error("Przeglądarka nie udostępnia watchAdvertisements. Czujnik zapisano; do odczytu użyj przycisku Nasłuchuj BLE lub aplikacji Android."));
   }
 
-  // GATT tylko jako fallback dla profili nie-ELA. Blue PUCK T/RHT nie wymaga CONNECT.
   const isEla = (device.name ?? "").toLowerCase().startsWith("p t") || (device.name ?? "").toLowerCase().includes("rht") || hintProfileId.startsWith("ela-blue-puck");
   if (!isEla) {
     connectGATTWithNotifications(device, hintProfileId, onData, onError).catch(() => {});
@@ -274,7 +327,7 @@ export const connectGATTWithNotifications = async (
 
     const emitValue = (value: DataView) => {
       const temp = decodeTempValue(value);
-      if (temp !== undefined) onData({ device, detectedProfileId: hintProfileId ?? "gatt-ess", data: { temperature: temp } });
+      if (temp !== undefined) onData({ device, detectedProfileId: hintProfileId ?? "gatt-ess", data: { temperature: temp, bleDebug: `GATT temperature=${temp}; ts=${nowIso()}` } });
     };
 
     try { emitValue(await char.readValue()); } catch { /* optional */ }
@@ -313,8 +366,7 @@ export const startAdvWatch = async (
 
   const handler = (event: BTAdvEvent) => {
     const decoded = decodeAdvertisementEvent(event, hintProfileId);
-    const hasUsefulData = decoded.data.temperature !== undefined || decoded.data.humidity !== undefined || decoded.data.battery !== undefined || decoded.data.batteryVoltage !== undefined || decoded.data.rssi !== undefined || decoded.data.rawServiceData || decoded.data.rawManufacturerData;
-    if (!hasUsefulData) return;
+    if (!hasUsefulDecodedData(decoded.data)) return;
     onData({ device, detectedProfileId: decoded.profileId ?? hintProfileId, data: decoded.data });
   };
 
@@ -336,8 +388,88 @@ export const startAdvWatch = async (
 };
 
 export const stopAdvWatch = (id: string) => { advControllers.get(id)?.abort(); advControllers.delete(id); };
+export const stopNameScan = (id: string) => {
+  const item = leScans.get(id);
+  if (!item) return;
+  try { item.scan.stop(); } catch { /* ignore */ }
+  try { getBT()?.removeEventListener("advertisementreceived", item.handler); } catch { /* ignore */ }
+  leScans.delete(id);
+};
 export const getCachedDevice = (id: string) => deviceCache.get(id);
 export const disconnectGATT = (d: BTDevice) => d.gatt?.disconnect();
+
+export const startNameBasedElaScan = async (
+  sensor: Sensor,
+  onData: ScanCallback,
+  onError?: (e: Error) => void
+): Promise<boolean> => {
+  const bt = getBT();
+  if (!bt?.requestLEScan) return false;
+
+  stopNameScan(sensor.id);
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const targetName = sensor.bluetoothName;
+
+  const handler = (event: BTAdvEvent) => {
+    if (!matchesSensorName(sensor, event.device?.name)) return;
+    if (timeoutId) { clearTimeout(timeoutId); timeoutId = undefined; }
+    if (event.device?.id) deviceCache.set(event.device.id, event.device);
+    const decoded = decodeAdvertisementEvent(event, sensor.profileId);
+    decoded.data.bleDebug = adDebug([
+      decoded.data.bleDebug,
+      `matchedByName=${targetName}`,
+      "scan=requestLEScan",
+    ]);
+    onData({ device: event.device, detectedProfileId: decoded.profileId ?? sensor.profileId, data: decoded.data });
+  };
+
+  try {
+    bt.addEventListener("advertisementreceived", handler);
+    const scan = await bt.requestLEScan({ filters: ELA_NAME_FILTERS, keepRepeatedDevices: true });
+    leScans.set(sensor.id, { scan, handler });
+    timeoutId = setTimeout(() => {
+      onError?.(new Error(`Nasłuch BLE aktywny, ale nie odebrano jeszcze ramki z ${targetName}. Zbliż telefon do czujnika albo wybierz czujnik ponownie.`));
+    }, LE_SCAN_TIMEOUT_MS);
+    return scan.active !== false;
+  } catch (e) {
+    bt.removeEventListener("advertisementreceived", handler);
+    leScans.delete(sensor.id);
+    const msg = e instanceof Error ? e.message : String(e);
+    onError?.(new Error(`Chrome nie uruchomił requestLEScan: ${msg}`));
+    return false;
+  }
+};
+
+const requestDeviceAgainAndWatch = async (
+  sensor: Sensor,
+  onData: ScanCallback,
+  onError?: (e: Error) => void
+): Promise<boolean> => {
+  const bt = getBT();
+  if (!bt) return false;
+  try {
+    const device = await bt.requestDevice(buildDeviceOptionsForSensor(sensor));
+    if (!device?.id) return false;
+    if (!matchesSensorName(sensor, device.name) && sensor.bluetoothName) {
+      onError?.(new Error(`Wybrano ${device.name ?? "urządzenie"}, ale zapisany czujnik to ${sensor.bluetoothName}. Wybierz właściwy czujnik.`));
+      return false;
+    }
+    deviceCache.set(device.id, device);
+    if (typeof device.watchAdvertisements === "function" && device.addEventListener) {
+      await startAdvWatch(device, sensor.profileId, onData, onError);
+      return true;
+    }
+    await connectGATTWithNotifications(device, sensor.profileId, onData, onError);
+    return true;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!msg.toLowerCase().includes("cancel") && !msg.toLowerCase().includes("user")) {
+      onError?.(new Error(`Nie udało się ponownie wybrać czujnika: ${msg}`));
+    }
+    return false;
+  }
+};
 
 export const reconnectSensor = async (
   sensor: Sensor,
@@ -349,19 +481,32 @@ export const reconnectSensor = async (
     const granted = await cacheGrantedDevices();
     device = granted.find((d) => d.id === sensor.deviceId || d.name === sensor.bluetoothName);
   }
-  if (!device) return false;
 
-  deviceCache.set(device.id, device);
-  stopAdvWatch(device.id);
+  const isElaAdv = sensor.profileId.startsWith("ela-blue-puck") || getProfile(sensor.profileId)?.source === "advertisement";
 
-  const profile = getProfile(sensor.profileId);
-  if (profile?.source === "advertisement" || sensor.profileId.startsWith("ela-blue-puck")) {
-    await startAdvWatch(device, sensor.profileId, onData, onError);
+  if (device) {
+    deviceCache.set(device.id, device);
+    stopAdvWatch(device.id);
+
+    if (isElaAdv) {
+      await startAdvWatch(device, sensor.profileId, onData, onError);
+      return true;
+    }
+
+    await connectGATTWithNotifications(device, sensor.profileId, onData, onError);
     return true;
   }
 
-  await connectGATTWithNotifications(device, sensor.profileId, onData, onError);
-  return true;
+  // v5.2: brak cache Chrome nie kończy pracy. Najpierw próbujemy skan po nazwie, potem ponowny wybór urządzenia.
+  if (isElaAdv) {
+    onError?.(new Error(`Brak cache Chrome — uruchamiam skan reklam po nazwie ${sensor.bluetoothName}.`));
+    const scanStarted = await startNameBasedElaScan(sensor, onData, onError);
+    if (scanStarted) return true;
+    onError?.(new Error("Chrome nie udostępnia requestLEScan — wybierz czujnik ponownie w oknie Bluetooth."));
+    return requestDeviceAgainAndWatch(sensor, onData, onError);
+  }
+
+  return requestDeviceAgainAndWatch(sensor, onData, onError);
 };
 
 export const readSensorGATT = async (device: BTDevice, profileId: string): Promise<DecodedData> => {

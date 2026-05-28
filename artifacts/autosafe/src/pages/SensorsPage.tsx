@@ -1,4 +1,4 @@
-// routes/sensors.tsx v5.1 — diagnostyka BLE i nasłuch reklam ELA
+// routes/sensors.tsx v5.2 — diagnostyka BLE, requestLEScan i ponowny wybór czujnika ELA
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,10 +21,13 @@ export function SensorsPage() {
 
   const handleListen = async (s: Sensor) => {
     if (s.isDemo) { toast.info("Czujnik demo jest zawsze połączony."); return; }
-    upsert({ ...s, status: "scanning" });
+    upsert({ ...s, status: "scanning", bleDebug: `Nasłuch BLE aktywny — szukam ${s.bluetoothName}` });
     const ok = await listen(s);
-    if (ok) toast.success("Nasłuch BLE uruchomiony. Poczekaj kilka–kilkanaście sekund na reklamę czujnika.");
-    else toast.warning("Nie mam dostępu do tego urządzenia w cache Chrome. Wybierz czujnik ponownie przez Dodaj → Skanuj ELA.");
+    if (ok) {
+      toast.success("Nasłuch BLE aktywny. Jeśli nie było cache Chrome, aplikacja skanuje reklamy po nazwie albo poprosi o ponowny wybór czujnika.");
+    } else {
+      toast.warning("Nie udało się uruchomić nasłuchu. Kliknij ponownie i wybierz czujnik w oknie Bluetooth, jeśli Chrome o to poprosi.");
+    }
   };
 
   const copyDiag = async (s: Sensor) => {
@@ -87,8 +90,17 @@ export function SensorsPage() {
               </CardHeader>
 
               <CardContent className="space-y-4">
-                {s.status === "pending" && !s.lastTemperature && (
-                  <div className="rounded-xl bg-primary/10 px-3 py-2 text-xs text-primary">Czujnik zapisany — uruchom „Odśwież BLE / nasłuchuj reklam”, aby odebrać dane z advertising.</div>
+                {(s.status === "pending" || s.status === "scanning") && !s.lastTemperature && (
+                  <div className="rounded-xl bg-primary/10 px-3 py-2 text-xs text-primary">
+                    {s.status === "scanning" ? `Nasłuch BLE aktywny — szukam ${s.bluetoothName}.` : "Czujnik zapisany — uruchom Nasłuchuj BLE, aby odebrać dane z advertising."}
+                  </div>
+                )}
+
+                {!s.isDemo && (
+                  <Button className="w-full" onClick={() => handleListen(s)}>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Nasłuchuj BLE / odśwież reklamę
+                  </Button>
                 )}
                 {s.status === "error" && s.bleDebug && (
                   <div className="rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive">{s.bleDebug}</div>

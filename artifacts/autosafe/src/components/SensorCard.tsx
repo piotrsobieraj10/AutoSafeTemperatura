@@ -1,4 +1,4 @@
-// components/SensorCard.tsx v2
+// components/SensorCard.tsx v5.2 — widoczny przycisk Nasłuchuj BLE na telefonie
 import type { Sensor, TempZone } from "@/types/sensor";
 import { getTempZone, ZONE_LABELS } from "@/types/sensor";
 import { formatTemp, formatHumidity, formatPressure, getSettings } from "@/services/storageService";
@@ -81,8 +81,8 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute, onListe
       <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/10 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-12 left-0 h-32 w-32 rounded-full bg-white/8 blur-2xl" />
 
-      {/* Quick actions */}
-      <div className="absolute right-3 top-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+      {/* Quick actions — widoczne także na telefonie */}
+      <div className="absolute right-3 top-3 flex gap-1 opacity-100 transition-opacity z-10">
         {onListen && !sensor.isDemo && (
           <button onClick={(e) => { e.stopPropagation(); onListen(); }} title="Odśwież BLE / nasłuchuj reklam"
             className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 backdrop-blur text-white/80 hover:bg-white/25 hover:text-white">
@@ -194,8 +194,18 @@ export function SensorCard({ sensor, onClick, onTogglePin, onToggleMute, onListe
 
         {isWaiting && !sensor.lastTemperature && (
           <div className="mt-3 rounded-2xl bg-white/15 px-3 py-2 text-xs font-medium text-white/80">
-            Czujnik zapisany — użyj „Odśwież BLE”, aby odebrać reklamę pomiarową.
+            {sensor.status === "scanning" ? `Nasłuch BLE aktywny — szukam ${sensor.bluetoothName}.` : "Czujnik zapisany — użyj Nasłuchuj BLE, aby odebrać reklamę pomiarową."}
           </div>
+        )}
+
+        {onListen && !sensor.isDemo && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onListen(); }}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-white/20 px-4 py-3 text-sm font-bold text-white shadow-sm backdrop-blur transition hover:bg-white/30"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Nasłuchuj BLE
+          </button>
         )}
 
         {/* Demo badge */}
