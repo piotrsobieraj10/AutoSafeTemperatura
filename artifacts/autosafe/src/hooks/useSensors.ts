@@ -86,6 +86,8 @@ export function useSensors() {
       lastTemperatureReadAt: data.temperature !== undefined ? now : current.lastTemperatureReadAt,
       lastHumidityReadAt: data.humidity !== undefined ? now : current.lastHumidityReadAt,
       lastBatteryReadAt: (data.battery !== undefined || data.batteryVoltage !== undefined) ? now : current.lastBatteryReadAt,
+      lastMeasurementSaveStatus: (data.temperature !== undefined || data.humidity !== undefined) ? "saved" : "waiting",
+      lastMeasurementSavedAt: (data.temperature !== undefined || data.humidity !== undefined) ? now : current.lastMeasurementSavedAt,
       status: "connected",
     };
 

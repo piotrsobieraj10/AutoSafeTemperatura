@@ -1,0 +1,96 @@
+Pracujemy na istniejącym projekcie AutoSafeTemperatura.
+
+Wgrałem paczkę:
+AutoSafe_Temperatura_v6_0_7_big_ux_update_patch.zip
+
+To jest jeden duży patch UX od punktu 3 ustaleń. Obejmuje:
+- dodawanie czujnika jako lista znalezionych urządzeń, bez automatycznego dodawania pierwszego,
+- ręczne dopasowanie po pełnej nazwie i samej końcówce, np. 9019F4,
+- poprawiony ekran konfiguracji na telefonie,
+- kompaktowy pulpit główny,
+- automatyczne odświeżanie przy otwartej aplikacji co 30 s domyślnie,
+- ustawienia częstotliwości odświeżania,
+- przygotowane ustawienia monitoringu w tle pod v6.1,
+- zakładkę Czujniki jako kompaktową listę,
+- szczegóły czujnika po kliknięciu z przyciskami Edytuj / Alarmy / Kalibracja / Historia / Diagnostyka BLE / Usuń,
+- widoczne ikony czujników,
+- Ustawienia jako sekcje rozwijane,
+- Obsługiwane czujniki jako karta rozwijana,
+- grupy czujników Dom / Garaż / Inne i możliwość dodawania własnych grup,
+- plan Android Foreground Service v6.1.
+
+WAŻNE:
+- Nie przebudowuj projektu od zera.
+- Nie usuwaj Androida.
+- Nie cofaj PWA.
+- Nie ruszaj logo AutoSafe.
+- Nie psuj działającego BLE.
+- Nie zmieniaj repozytorium GitHub.
+- Nie rób force push.
+- Nie zmieniaj dekoderów BLE poza zachowaniem obecnego działania:
+  - 0x2A6E temperatura int16LE / 100,
+  - 0x2A6F wilgotność RHT: 1 bajt procentów + fallback 2 bajty / 100,
+  - 0x0757 bateria mV.
+
+Najpierw wykonaj:
+
+git status
+git branch backup-przed-v6-0-7-big-ux-update
+
+Jeżeli branch już istnieje, idź dalej.
+
+Zastosuj patch:
+1. Rozpakuj AutoSafe_Temperatura_v6_0_7_big_ux_update_patch.zip.
+2. Skopiuj pliki z paczki do projektu, nadpisując istniejące.
+3. Upewnij się, że nowy plik istnieje:
+   artifacts/autosafe/src/services/sensorUiService.ts
+4. Upewnij się, że nowe dokumenty istnieją:
+   artifacts/autosafe/ZMIANY_v6_0_7_big_ux_update.md
+   artifacts/autosafe/ANDROID_BACKGROUND_MONITORING_PLAN_v6_1.md
+
+Po zastosowaniu uruchom:
+
+PORT=3000 BASE_PATH=/ pnpm --filter @workspace/autosafe run build
+
+Jeżeli build pokaże błędy TypeScript/React, napraw je bez usuwania funkcji.
+
+Potem:
+
+cd artifacts/autosafe
+pnpm exec cap sync android
+
+Sprawdź wymagania:
+1. Wersja UI ma być:
+   AutoSafe_Temperatura_v6.0.7_big_ux_update
+2. Dodawanie czujnika ma pokazywać listę znalezionych czujników BLE.
+3. Nie wolno automatycznie dodawać pierwszego czujnika.
+4. Ręczne dopasowanie ma działać po końcówce typu 9019F4.
+5. Ekran konfiguracji ma mieć pionowy scroll i mieścić się na telefonie.
+6. Pulpit główny ma mieć mniejsze Centrum monitoringu.
+7. Karty czujników mają być kompaktowe.
+8. Przy otwartej aplikacji ma być ustawienie odświeżania domyślnie co 30 s.
+9. Monitoring w tle ma mieć ustawienia, ale pełny Foreground Service zostaje jako plan v6.1.
+10. Zakładka Czujniki ma być kompaktową listą.
+11. Kliknięcie czujnika otwiera szczegóły i akcje: Edytuj, Alarmy, Kalibracja, Historia, Diagnostyka BLE, Usuń.
+12. Ikony czujników mają być widoczne, nie tylko wybierane w formularzu.
+13. Ustawienia mają być sekcjami rozwijanymi.
+14. Obsługiwane czujniki mają być kartą rozwijaną.
+15. Grupy czujników mają działać i stare czujniki bez grupy mają dostać grupę domyślną.
+16. Dekodery 0x2A6E / 0x2A6F / 0x0757 mają pozostać działające.
+
+Jeżeli wszystko przejdzie:
+
+cd ~/workspace
+git add .
+git commit -m "AutoSafe_Temperatura_v6.0.7 - big UX update"
+git push origin main
+
+Po pushu GitHub Actions powinno zbudować nowe APK.
+
+Na końcu podaj:
+- jakie pliki zmieniono,
+- czy build web przeszedł,
+- czy cap sync android przeszedł,
+- czy wersja UI to AutoSafe_Temperatura_v6.0.7_big_ux_update,
+- czy GitHub Actions ruszyło,
+- gdzie pobrać nowe APK po zakończeniu workflow.

@@ -4,7 +4,6 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type { DecodedData, Sensor } from "@/types/sensor";
 import { detectProfileByName } from "./sensorProfiles";
-import { decodeBleError } from "./bleErrorDecoder";
 import type { BTDevice, ScanCallback, ScanMode } from "./bluetoothService";
 
 interface NativeElaAdvertisement {
@@ -28,20 +27,12 @@ interface NativeScanOptions {
   namePrefixes?: string[];
 }
 
-interface NativeScanStoppedEvent {
-  reason?: string;
-  code?: string;
-  message?: string;
-  androidScanError?: number;
-  [key: string]: unknown;
-}
-
 interface AutosafeBlePlugin {
-  startScan(options?: NativeScanOptions): Promise<{ active: boolean; mode: string; alreadyRunning?: boolean }>;
+  startScan(options?: NativeScanOptions): Promise<{ active: boolean; mode: string }>;
   stopScan(): Promise<{ stopped: boolean }>;
-  getStatus(): Promise<{ supported: boolean; bluetoothEnabled: boolean; scannerAvailable?: boolean; scanning: boolean }>;
+  getStatus(): Promise<{ supported: boolean; bluetoothEnabled: boolean; scanning: boolean }>;
   addListener(eventName: "elaAdvertisement", listenerFunc: (event: NativeElaAdvertisement) => void): Promise<PluginListenerHandle>;
-  addListener(eventName: "elaScanStopped", listenerFunc: (event: NativeScanStoppedEvent) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: "elaScanStopped", listenerFunc: (event: { reason?: string }) => void): Promise<PluginListenerHandle>;
 }
 
 const AutosafeBle = registerPlugin<AutosafeBlePlugin>("AutosafeBle");
@@ -51,17 +42,6 @@ let lastStartAt = 0;
 
 const NAME_PREFIXES = ["P T", "P T EN", "P RHT", "P RHT EN", "BPUCK", "ELA"];
 const SCAN_SECONDS = 75;
-
-const bleErrorToError = (error: unknown, prefix?: string): Error => {
-  const decoded = decodeBleError(error);
-  const action = decoded.action ? ` ${decoded.action}` : "";
-  const details = decoded.technicalDetails ? ` Szczegóły techniczne: ${decoded.technicalDetails}` : "";
-  return new Error(`${prefix ? `${prefix}: ` : ""}${decoded.title}: ${decoded.userMessage}${action} Kod: ${decoded.code}.${details}`);
-};
-
-const reportBleError = (onError: ((e: Error) => void) | undefined, error: unknown, prefix?: string) => {
-  onError?.(bleErrorToError(error, prefix));
-};
 
 export const isNativeBleAvailable = (): boolean => {
   try {
@@ -135,7 +115,8 @@ const ensureNativeScan = async (onError?: (e: Error) => void): Promise<boolean> 
     lastStartAt = now;
     return result.active;
   } catch (e) {
-    reportBleError(onError, e, "Android BLE");
+    const msg = e instanceof Error ? e.message : String(e);
+    onError?.(new Error(`Android BLE: nie udało się uruchomić natywnego skanowania: ${msg}`));
     return false;
   }
 };
@@ -160,12 +141,6 @@ export const reconnectSensorNative = async (
     try { await existing.remove(); } catch { /* ignore */ }
     handles.delete(sensor.id);
   }
-  const stoppedKey = `${sensor.id}:stopped`;
-  const existingStopped = handles.get(stoppedKey);
-  if (existingStopped) {
-    try { await existingStopped.remove(); } catch { /* ignore */ }
-    handles.delete(stoppedKey);
-  }
 
   const handle = await AutosafeBle.addListener("elaAdvertisement", (event) => {
     if (!matchesSensorName(sensor, event.name) && !matchesSensorName(sensor, event.deviceId) && !matchesSensorName(sensor, event.address)) return;
@@ -173,12 +148,6 @@ export const reconnectSensorNative = async (
     onData(result);
   });
   handles.set(sensor.id, handle);
-
-  const stoppedHandle = await AutosafeBle.addListener("elaScanStopped", (event) => {
-    if (!event || event.reason === "stopped") return;
-    reportBleError(onError, event, "Android BLE");
-  });
-  handles.set(stoppedKey, stoppedHandle);
 
   const ok = await ensureNativeScan(onError);
   if (ok) {
@@ -197,51 +166,37 @@ export const scanForDeviceNative = async (
   return new Promise<BTDevice | null>(async (resolve) => {
     let resolved = false;
     let handle: PluginListenerHandle | undefined;
-    let stoppedHandle: PluginListenerHandle | undefined;
-    const cleanup = async () => {
-      try { await handle?.remove(); } catch { /* ignore */ }
-      try { await stoppedHandle?.remove(); } catch { /* ignore */ }
-    };
     const timeout = window.setTimeout(async () => {
       if (resolved) return;
       resolved = true;
-      await cleanup();
-      onError?.(new Error("Android BLE: nie znaleziono czujnika w czasie skanowania. Zbliż telefon do ELA Blue PUCK i spróbuj ponownie."));
+      try { await handle?.remove(); } catch { /* ignore */ }
+      // W trybie dodawania nie wybieramy automatycznie pierwszego czujnika.
+      // Callback zebrał listę kandydatów, a użytkownik świadomie wybiera właściwy.
       resolve(null);
-    }, 35_000);
+    }, 12_000);
 
     try {
-      stoppedHandle = await AutosafeBle.addListener("elaScanStopped", (event) => {
-        if (!event || event.reason === "stopped") return;
-        reportBleError(onError, event, "Android BLE");
-      });
-
       handle = await AutosafeBle.addListener("elaAdvertisement", (event) => {
         const name = event.name ?? "";
         const isEla = /^(P\s*T|P\s*RHT|BPUCK|ELA)/i.test(name);
         if (mode === "ela" && !isEla) return;
         const result = nativeEventToResult(event);
         onData(result);
-        if (!resolved) {
-          resolved = true;
-          window.clearTimeout(timeout);
-          cleanup().catch(() => {});
-          resolve(result.device);
-        }
+        // Nie resolve po pierwszej ramce — pokaż listę znalezionych czujników w UI.
       });
       const ok = await ensureNativeScan(onError);
       if (!ok && !resolved) {
         resolved = true;
         window.clearTimeout(timeout);
-        await cleanup();
+        try { await handle.remove(); } catch { /* ignore */ }
         resolve(null);
       }
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       if (!resolved) {
         resolved = true;
         window.clearTimeout(timeout);
-        await cleanup();
-        reportBleError(onError, e, "Android BLE");
+        onError?.(new Error(`Android BLE: błąd skanowania: ${msg}`));
         resolve(null);
       }
     }

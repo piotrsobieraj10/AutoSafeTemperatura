@@ -1,5 +1,5 @@
 // storageService.ts v5.6.3 — stabilne dane lokalne, eksport, raporty i ustawienia AutoSafe
-import type { AlertEvent, AppSettings, Measurement, Sensor } from "@/types/sensor";
+import type { AlertEvent, AppSettings, Measurement, Sensor, SensorGroup } from "@/types/sensor";
 export type { AppSettings } from "@/types/sensor";
 
 export const K = {
@@ -7,10 +7,44 @@ export const K = {
   MEASUREMENTS: "thermo.v2.measurements",
   SETTINGS:     "thermo.v2.settings",
   ALERTS:       "thermo.v2.alerts",
+  GROUPS:       "thermo.v2.groups",
 };
 
 const MAX_MEASUREMENTS = 20_000;
 const MAX_ALERTS       = 500;
+
+export const DEFAULT_GROUPS: SensorGroup[] = [
+  { id: "group-dom", name: "Dom", icon: "home", collapsed: false },
+  { id: "group-garaz", name: "Garaż", icon: "garage", collapsed: false },
+  { id: "group-inne", name: "Inne", icon: "other", collapsed: false },
+];
+
+const normalizeTextId = (value: string) => value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "grupa";
+
+const ensureGroups = (groups: SensorGroup[]): SensorGroup[] => {
+  const list = Array.isArray(groups) && groups.length ? groups : DEFAULT_GROUPS;
+  const seen = new Set<string>();
+  const normalized = list.map((g, i) => {
+    const id = g.id || `group-${normalizeTextId(g.name || `grupa-${i + 1}`)}`;
+    const uniqueId = seen.has(id) ? `${id}-${i}` : id;
+    seen.add(uniqueId);
+    return { ...g, id: uniqueId, name: (g.name || "Grupa").trim(), icon: g.icon ?? "other", collapsed: g.collapsed ?? false };
+  });
+  for (const g of DEFAULT_GROUPS) if (!normalized.some((x) => x.id === g.id)) normalized.push(g);
+  return normalized;
+};
+
+const defaultGroupId = () => getSensorGroups()[0]?.id ?? DEFAULT_GROUPS[0].id;
+
+const normalizeSensor = (s: Sensor): Sensor => ({
+  ...s,
+  groupId: s.groupId || defaultGroupId(),
+  locationIcon: s.locationIcon ?? "sensor",
+  temperatureOffset: s.temperatureOffset ?? 0,
+  humidityOffset: s.humidityOffset ?? 0,
+  offlineAlertMinutes: s.offlineAlertMinutes ?? 30,
+  lastMeasurementSaveStatus: s.lastMeasurementSaveStatus ?? (s.lastReadAt ? "saved" : "waiting"),
+});
 
 const read = <T>(key: string, fb: T): T => {
   try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fb; }
@@ -35,14 +69,32 @@ export const emitDataChanged = () => {
 export const notifyStorageChanged = () => emitDataChanged();
 
 // ── Sensors ─────────────────────────────────────────────────
-export const getSensors = (): Sensor[] => read<Sensor[]>(K.SENSORS, []).map((s) => ({
-  ...s,
-  temperatureOffset: s.temperatureOffset ?? 0,
-  humidityOffset: s.humidityOffset ?? 0,
-  offlineAlertMinutes: s.offlineAlertMinutes ?? 30,
-}));
+export const getSensorGroups = (): SensorGroup[] => ensureGroups(read<SensorGroup[]>(K.GROUPS, DEFAULT_GROUPS));
+export const saveSensorGroups = (groups: SensorGroup[]) => { write(K.GROUPS, ensureGroups(groups)); emitDataChanged(); };
+export const upsertSensorGroup = (group: SensorGroup): void => {
+  const groups = getSensorGroups();
+  const i = groups.findIndex((g) => g.id === group.id);
+  i >= 0 ? (groups[i] = group) : groups.push(group);
+  saveSensorGroups(groups);
+};
+export const createSensorGroup = (name: string, icon: SensorGroup["icon"] = "other"): SensorGroup => {
+  const base = `group-${normalizeTextId(name)}`;
+  const existing = new Set(getSensorGroups().map((g) => g.id));
+  let id = base; let i = 2;
+  while (existing.has(id)) id = `${base}-${i++}`;
+  const group: SensorGroup = { id, name: name.trim() || "Nowa grupa", icon, collapsed: false, createdAt: new Date().toISOString() };
+  upsertSensorGroup(group);
+  return group;
+};
+export const deleteSensorGroup = (id: string): boolean => {
+  if (getSensors().some((s) => s.groupId === id)) return false;
+  saveSensorGroups(getSensorGroups().filter((g) => g.id !== id));
+  return true;
+};
 
-export const saveSensors = (s: Sensor[]) => { write(K.SENSORS, s); emitDataChanged(); };
+export const getSensors = (): Sensor[] => read<Sensor[]>(K.SENSORS, []).map(normalizeSensor);
+
+export const saveSensors = (s: Sensor[]) => { write(K.SENSORS, s.map(normalizeSensor)); emitDataChanged(); };
 
 export const upsertSensor = (s: Sensor): void => {
   const list = getSensors();
@@ -114,6 +166,8 @@ export const sanitizeLocalStorage = (): void => {
     write(K.SENSORS, sensors);
     write(K.MEASUREMENTS, measurements);
     write(K.ALERTS, alerts);
+    write(K.GROUPS, getSensorGroups());
+    write(K.SENSORS, sensors.map(normalizeSensor));
     write(K.SETTINGS, { ...DEFAULT_SETTINGS, ...getSettings(), autoStartMonitor: false });
   } catch {
     // Jeśli dane są uszkodzone, nie pozwól wywrócić aplikacji przy starcie.
@@ -149,12 +203,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   alertVibration:    true,
   chartDefaultRange: "24h",
   maxMeasurements:   MAX_MEASUREMENTS,
-  dashboardDensity:  "comfortable",
+  dashboardDensity:  "compact",
   showBleDiagnostics:false,
   autoStartMonitor:  false,
   monitorDuration:   "quick",
   showFirstRunTips:  true,
   hideTechnicalMessages: true,
+  foregroundRefreshEnabled: true,
+  foregroundRefreshIntervalMs: 30000,
+  backgroundMonitoringMode: "eco",
 };
 
 export const getSettings = (): AppSettings => ({ ...DEFAULT_SETTINGS, ...read<Partial<AppSettings>>(K.SETTINGS, {}) });
@@ -210,12 +267,14 @@ export const createBackupJson = (): string => JSON.stringify({
   sensors: getSensors(),
   measurements: getMeasurements(),
   alerts: getAlerts(),
+  groups: getSensorGroups(),
   settings: getSettings(),
 }, null, 2);
 
 export const importBackupJson = (json: string): void => {
-  const data = JSON.parse(json) as Partial<{ sensors: Sensor[]; measurements: Measurement[]; alerts: AlertEvent[]; settings: AppSettings }>;
-  if (Array.isArray(data.sensors)) write(K.SENSORS, data.sensors);
+  const data = JSON.parse(json) as Partial<{ sensors: Sensor[]; measurements: Measurement[]; alerts: AlertEvent[]; groups: SensorGroup[]; settings: AppSettings }>;
+  if (Array.isArray(data.groups)) write(K.GROUPS, ensureGroups(data.groups));
+  if (Array.isArray(data.sensors)) write(K.SENSORS, data.sensors.map(normalizeSensor));
   if (Array.isArray(data.measurements)) write(K.MEASUREMENTS, data.measurements.slice(-MAX_MEASUREMENTS));
   if (Array.isArray(data.alerts)) write(K.ALERTS, data.alerts.slice(-MAX_ALERTS));
   if (data.settings) write(K.SETTINGS, { ...DEFAULT_SETTINGS, ...data.settings });

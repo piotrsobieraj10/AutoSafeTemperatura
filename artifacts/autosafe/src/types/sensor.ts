@@ -13,7 +13,10 @@ export interface Sensor {
   macAddress?: string;
   roomName: string;
   customName?: string;
-  locationIcon?: "home" | "bed" | "kitchen" | "bath" | "garage" | "boiler" | "warehouse" | "leaf" | "sensor";
+  locationIcon?: "home" | "living" | "bed" | "kitchen" | "bath" | "garage" | "boiler" | "warehouse" | "fridge" | "car" | "leaf" | "thermometer" | "humidity" | "sensor";
+  groupId?: string;
+  lastMeasurementSavedAt?: string;
+  lastMeasurementSaveStatus?: "saved" | "waiting" | "skipped" | "error";
   profileId: string;
   lastTemperature?: number;   // zawsze °C wewnętrznie
   lastHumidity?: number;
@@ -96,6 +99,14 @@ export interface DecodedData {
   bleDebug?: string;
 }
 
+export interface SensorGroup {
+  id: string;
+  name: string;
+  icon?: "home" | "floor" | "garage" | "boiler" | "fridge" | "warehouse" | "other";
+  collapsed?: boolean;
+  createdAt?: string;
+}
+
 export interface AppSettings {
   demoMode: boolean;
   theme: "light" | "dark" | "system";
@@ -110,6 +121,9 @@ export interface AppSettings {
   showBleDiagnostics?: boolean;
   autoStartMonitor?: boolean;
   monitorDuration?: "quick" | "fiveMin" | "continuous";
+  foregroundRefreshEnabled?: boolean;
+  foregroundRefreshIntervalMs?: 15000 | 30000 | 60000 | 120000 | 0;
+  backgroundMonitoringMode?: "off" | "eco" | "normal" | "test";
   showFirstRunTips?: boolean;
   hideTechnicalMessages?: boolean;
 }
