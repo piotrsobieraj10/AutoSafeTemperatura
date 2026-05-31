@@ -1,5 +1,6 @@
 // storageService.ts v5.6.3 — stabilne dane lokalne, eksport, raporty i ustawienia AutoSafe
 import type { AlertEvent, AppSettings, Measurement, Sensor, SensorGroup } from "@/types/sensor";
+import { APP_VERSION } from "@/config/app";
 export type { AppSettings } from "@/types/sensor";
 
 export const K = {
@@ -15,8 +16,10 @@ const MAX_ALERTS       = 500;
 
 export const DEFAULT_GROUPS: SensorGroup[] = [
   { id: "group-dom", name: "Dom", icon: "home", collapsed: false },
+  { id: "group-parter", name: "Parter", icon: "floor", collapsed: false },
+  { id: "group-pietro", name: "Piętro", icon: "floor", collapsed: false },
   { id: "group-garaz", name: "Garaż", icon: "garage", collapsed: false },
-  { id: "group-inne", name: "Inne", icon: "other", collapsed: false },
+  { id: "group-bez-grupy", name: "Bez grupy", icon: "other", collapsed: false },
 ];
 
 const normalizeTextId = (value: string) => value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "grupa";
@@ -24,7 +27,7 @@ const normalizeTextId = (value: string) => value.toLowerCase().normalize("NFD").
 const ensureGroups = (groups: SensorGroup[]): SensorGroup[] => {
   const list = Array.isArray(groups) && groups.length ? groups : DEFAULT_GROUPS;
   const seen = new Set<string>();
-  const normalized = list.map((g, i) => {
+  const normalized: SensorGroup[] = list.map((g, i) => {
     const id = g.id || `group-${normalizeTextId(g.name || `grupa-${i + 1}`)}`;
     const uniqueId = seen.has(id) ? `${id}-${i}` : id;
     seen.add(uniqueId);
@@ -117,20 +120,21 @@ export const patchSensor = (id: string, patch: Partial<Sensor>): void => {
 // ── Measurements ────────────────────────────────────────────
 export const getMeasurements = (): Measurement[] => read<Measurement[]>(K.MEASUREMENTS, []);
 
-export const addMeasurement = (m: Measurement): void => {
+export const addMeasurement = (m: Measurement): boolean => {
   const list = getMeasurements();
-  // nie zapisuj identycznego pomiaru częściej niż co 15 sekund dla tego samego czujnika
   const last = [...list].reverse().find((x) => x.sensorId === m.sensorId);
   if (last) {
     const dt = new Date(m.createdAt).getTime() - new Date(last.createdAt).getTime();
-    const sameTemp = Math.abs((last.temperature ?? 0) - (m.temperature ?? 0)) < 0.005;
-    const sameHum = (last.humidity ?? -1) === (m.humidity ?? -1);
-    const sameBat = (last.batteryVoltage ?? -1) === (m.batteryVoltage ?? -1);
-    if (dt >= 0 && dt < 15_000 && sameTemp && sameHum && sameBat) return;
+    const tempChanged = Math.abs((last.temperature ?? 0) - (m.temperature ?? 0)) >= 0.2;
+    const humidityChanged = Math.abs((last.humidity ?? -1) - (m.humidity ?? -1)) >= 1;
+    const batteryChanged = Math.abs((last.batteryVoltage ?? -1) - (m.batteryVoltage ?? -1)) >= 50 || Math.abs((last.batteryLevel ?? -1) - (m.batteryLevel ?? -1)) >= 5;
+    const rssiChanged = Math.abs((last.rssi ?? -999) - (m.rssi ?? -999)) >= 8;
+    if (dt >= 0 && dt < 60_000 && !tempChanged && !humidityChanged && !batteryChanged && !rssiChanged) return false;
   }
   list.push(m);
   write(K.MEASUREMENTS, list.slice(-MAX_MEASUREMENTS));
   emitDataChanged();
+  return true;
 };
 
 export const getMeasurementsForSensor = (sensorId: string, sinceMs?: number): Measurement[] => {
@@ -168,7 +172,7 @@ export const sanitizeLocalStorage = (): void => {
     write(K.ALERTS, alerts);
     write(K.GROUPS, getSensorGroups());
     write(K.SENSORS, sensors.map(normalizeSensor));
-    write(K.SETTINGS, { ...DEFAULT_SETTINGS, ...getSettings(), autoStartMonitor: false });
+    write(K.SETTINGS, { ...DEFAULT_SETTINGS, ...getSettings() });
   } catch {
     // Jeśli dane są uszkodzone, nie pozwól wywrócić aplikacji przy starcie.
     try { write(K.SETTINGS, DEFAULT_SETTINGS); } catch { /* ignore */ }
@@ -211,11 +215,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hideTechnicalMessages: true,
   foregroundRefreshEnabled: true,
   foregroundRefreshIntervalMs: 30000,
-  backgroundMonitoringMode: "eco",
+  backgroundMonitoringMode: "off",
 };
 
 export const getSettings = (): AppSettings => ({ ...DEFAULT_SETTINGS, ...read<Partial<AppSettings>>(K.SETTINGS, {}) });
-export const saveSettings = (s: AppSettings) => { write(K.SETTINGS, s); emitDataChanged(); };
+export const emitSettingsChanged = () => {
+  try { window.dispatchEvent(new CustomEvent("autosafe:settings-changed")); } catch {}
+};
+export const saveSettings = (s: AppSettings) => { write(K.SETTINGS, s); emitSettingsChanged(); emitDataChanged(); };
 export const patchSettings = (patch: Partial<AppSettings>) => saveSettings({ ...getSettings(), ...patch });
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -262,7 +269,7 @@ export const exportCsv = (): string => {
 };
 
 export const createBackupJson = (): string => JSON.stringify({
-  version: "AutoSafe_Temperatura_v6.0.4_RHT_humidity_fix",
+  version: APP_VERSION,
   exportedAt: new Date().toISOString(),
   sensors: getSensors(),
   measurements: getMeasurements(),
@@ -302,7 +309,7 @@ export const exportHtmlReport = (rangeLabel = "raport") => {
     return `<tr><td><strong>${esc(s.roomName)}</strong><br><small>${esc(s.bluetoothName)}</small></td><td>${esc(formatTemp(s.lastTemperature, "C"))}</td><td>${esc(s.lastHumidity != null ? formatHumidity(s.lastHumidity) : "—")}</td><td>${esc(formatBattery(s.batteryVoltage, s.batteryLevel))}</td><td>${esc(s.lastRssi != null ? `${s.lastRssi} dBm` : "—")}</td><td>${min} / ${avg} / ${max} °C<br><small>Śr. wilg.: ${hum}%</small></td><td>${esc(s.lastReadAt ? new Date(s.lastReadAt).toLocaleString("pl-PL") : "—")}</td></tr>`;
   }).join("");
   const alertRows = alerts.slice(-40).reverse().map((a) => `<tr><td>${esc(new Date(a.createdAt).toLocaleString("pl-PL"))}</td><td>${esc(a.roomName)}</td><td>${esc(a.type)}</td><td>${esc(a.value)}</td><td>${esc(a.threshold)}</td></tr>`).join("");
-  return `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>AutoSafe Temperatura — ${esc(rangeLabel)}</title><style>body{font-family:Arial,sans-serif;margin:32px;color:#151515}h1{margin:0 0 4px}small{color:#666}.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px}.logo{width:46px;height:46px;border-radius:12px;background:#111;color:#c7a348;display:grid;place-items:center;font-weight:800}table{width:100%;border-collapse:collapse;margin:16px 0 28px}th,td{border:1px solid #ddd;padding:9px;text-align:left;font-size:13px}th{background:#f5f1e7}.muted{color:#666}.footer{margin-top:30px;font-size:11px;color:#777}@media print{body{margin:18mm}.no-print{display:none}}</style></head><body><div class="brand"><div class="logo">AS</div><div><h1>AutoSafe Temperatura</h1><div class="muted">Raport wygenerowany: ${esc(generatedAt)}</div></div></div><h2>Czujniki i statystyki</h2><table><thead><tr><th>Czujnik</th><th>Aktualna temp.</th><th>Wilgotność</th><th>Bateria</th><th>RSSI</th><th>Min/Avg/Max</th><th>Ostatni odczyt</th></tr></thead><tbody>${sensorRows || `<tr><td colspan="7">Brak czujników</td></tr>`}</tbody></table><h2>Ostatnie alerty</h2><table><thead><tr><th>Data</th><th>Pomieszczenie</th><th>Typ</th><th>Wartość</th><th>Próg</th></tr></thead><tbody>${alertRows || `<tr><td colspan="5">Brak alertów</td></tr>`}</tbody></table><p class="footer">Dane przechowywane lokalnie w aplikacji AutoSafe_Temperatura_v6.0.4_RHT_humidity_fix. W przeglądarce użyj Drukuj → Zapisz jako PDF.</p><button class="no-print" onclick="window.print()">Drukuj / zapisz PDF</button></body></html>`;
+  return `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>AutoSafe Temperatura — ${esc(rangeLabel)}</title><style>body{font-family:Arial,sans-serif;margin:32px;color:#151515}h1{margin:0 0 4px}small{color:#666}.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px}.logo{width:46px;height:46px;border-radius:12px;background:#111;color:#c7a348;display:grid;place-items:center;font-weight:800}table{width:100%;border-collapse:collapse;margin:16px 0 28px}th,td{border:1px solid #ddd;padding:9px;text-align:left;font-size:13px}th{background:#f5f1e7}.muted{color:#666}.footer{margin-top:30px;font-size:11px;color:#777}@media print{body{margin:18mm}.no-print{display:none}}</style></head><body><div class="brand"><div class="logo">AS</div><div><h1>AutoSafe Temperatura</h1><div class="muted">Raport wygenerowany: ${esc(generatedAt)}</div></div></div><h2>Czujniki i statystyki</h2><table><thead><tr><th>Czujnik</th><th>Aktualna temp.</th><th>Wilgotność</th><th>Bateria</th><th>RSSI</th><th>Min/Avg/Max</th><th>Ostatni odczyt</th></tr></thead><tbody>${sensorRows || `<tr><td colspan="7">Brak czujników</td></tr>`}</tbody></table><h2>Ostatnie alerty</h2><table><thead><tr><th>Data</th><th>Pomieszczenie</th><th>Typ</th><th>Wartość</th><th>Próg</th></tr></thead><tbody>${alertRows || `<tr><td colspan="5">Brak alertów</td></tr>`}</tbody></table><p class="footer">Dane przechowywane lokalnie w aplikacji ${esc(APP_VERSION)}. W przeglądarce użyj Drukuj → Zapisz jako PDF.</p><button class="no-print" onclick="window.print()">Drukuj / zapisz PDF</button></body></html>`;
 };
 
 export const openHtmlReport = () => {

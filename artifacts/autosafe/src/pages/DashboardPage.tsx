@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AddSensorModal } from "@/components/AddSensorModal";
 import { SensorCard } from "@/components/SensorCard";
 import { useSensors } from "@/hooks/useSensors";
+import { browserAutoRefreshLimitationMessage, getAutoRefreshStatus, refreshIntervalLabel, subscribeAutoRefreshStatus } from "@/services/autoRefreshService";
 import { getSensorGroups, getSettings, patchSettings, saveSensorGroups } from "@/services/storageService";
 import { getGroupIcon, getUiStatus } from "@/services/sensorUiService";
 import type { Sensor, SensorGroup } from "@/types/sensor";
@@ -11,7 +12,7 @@ import { ChevronDown, Plus, Radio, RefreshCw, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
-const REFRESH_LABELS: Record<number, string> = { 0: "ręcznie", 15000: "15 s", 30000: "30 s", 60000: "60 s", 120000: "2 min" };
+const formatTime = (iso?: string) => iso ? new Date(iso).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }) : "—";
 
 const groupSensors = (groups: SensorGroup[], sensors: Sensor[]) => groups
   .map((group) => ({ group, sensors: sensors.filter((s) => (s.groupId || groups[0]?.id) === group.id) }))
@@ -23,7 +24,9 @@ export function DashboardPage() {
   const [busy, setBusy] = useState(false);
   const [groups, setGroups] = useState(() => getSensorGroups());
   const [selected, setSelected] = useState<Sensor | null>(null);
-  const refreshTimer = useRef<number | null>(null);
+  const busyRef = useRef(false);
+  const [autoStatus, setAutoStatus] = useState(() => getAutoRefreshStatus());
+  const [now, setNow] = useState(() => Date.now());
   const settings = getSettings();
 
   const stats = useMemo(() => {
@@ -35,24 +38,23 @@ export function DashboardPage() {
   }, [sensors]);
 
   const grouped = useMemo(() => groupSensors(groups, sensors), [groups, sensors]);
+  const nextRefreshIn = autoStatus.nextRefreshAt ? Math.max(0, Math.ceil((autoStatus.nextRefreshAt - now) / 1000)) : null;
 
-  const refreshAll = async (silent = false) => {
-    if (busy) return;
+  const refreshAll = useCallback(async (silent = false) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
-    const ok = await listenAll();
+    const ok = await listenAll({ automatic: false });
     setBusy(false);
+    busyRef.current = false;
     if (!silent) ok ? toast.success("Odświeżanie BLE uruchomione.") : toast.warning("Nie udało się uruchomić odświeżania BLE.");
-  };
+  }, [listenAll]);
 
   useEffect(() => {
-    if (refreshTimer.current) window.clearInterval(refreshTimer.current);
-    if (!settings.foregroundRefreshEnabled || !settings.foregroundRefreshIntervalMs || settings.foregroundRefreshIntervalMs <= 0) return;
-    refreshTimer.current = window.setInterval(() => {
-      if (document.visibilityState === "visible") refreshAll(true);
-    }, settings.foregroundRefreshIntervalMs);
-    return () => { if (refreshTimer.current) window.clearInterval(refreshTimer.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.foregroundRefreshEnabled, settings.foregroundRefreshIntervalMs, sensors.length, busy]);
+    const unsubscribe = subscribeAutoRefreshStatus(setAutoStatus);
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => { unsubscribe(); window.clearInterval(tick); };
+  }, []);
 
   useEffect(() => () => stopMonitoringAll(), [stopMonitoringAll]);
 
@@ -82,9 +84,13 @@ export function DashboardPage() {
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
           <Radio className="h-3.5 w-3.5" />
-          <span>Auto odświeżanie: {settings.foregroundRefreshEnabled ? REFRESH_LABELS[settings.foregroundRefreshIntervalMs ?? 30000] : "wyłączone"}</span>
+          <span>Auto odświeżanie: {autoStatus.enabled ? refreshIntervalLabel(autoStatus.intervalMs) : "ręcznie"}</span>
+          <span>· Ostatnie odświeżenie: {formatTime(autoStatus.lastRefreshAt)}</span>
+          {autoStatus.scanning && <span>· Skanowanie trwa…</span>}
+          {nextRefreshIn != null && autoStatus.enabled && !autoStatus.scanning && <span>· Następne za: {nextRefreshIn} s</span>}
           <span>· tło: {settings.backgroundMonitoringMode === "eco" ? "oszczędny 5 min" : settings.backgroundMonitoringMode === "normal" ? "normalny 2 min" : settings.backgroundMonitoringMode === "test" ? "testowy 30 s" : "wyłączony"}</span>
         </div>
+        {autoStatus.lastError === browserAutoRefreshLimitationMessage && <p className="mt-2 text-[11px] text-muted-foreground">{browserAutoRefreshLimitationMessage}</p>}
       </section>
 
       {sensors.length === 0 ? (

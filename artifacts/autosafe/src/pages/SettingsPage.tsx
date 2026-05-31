@@ -29,6 +29,11 @@ export function SettingsPage() {
 
   useEffect(() => { isBluetoothAvailable().then(setBtOk); }, []);
   const update = (patch: Partial<AppSettings>) => { const next = { ...getSettings(), ...patch }; patchSettings(patch); setS(next); };
+  const updateForegroundSwitch = (enabled: boolean) => update({ foregroundRefreshEnabled: enabled, foregroundRefreshIntervalMs: enabled && !s.foregroundRefreshIntervalMs ? 30000 : s.foregroundRefreshIntervalMs });
+  const updateForegroundInterval = (value: string) => {
+    const interval = Number(value) as 0 | 15000 | 30000 | 60000 | 120000;
+    update({ foregroundRefreshIntervalMs: interval, foregroundRefreshEnabled: interval > 0 });
+  };
   const refreshGroups = () => setGroups(getSensorGroups());
 
   const importFile = async (file?: File) => {
@@ -62,10 +67,10 @@ export function SettingsPage() {
 
         <SettingsSection value="refresh" title="Odświeżanie i monitoring" icon={<Radio className="h-4 w-4" />}>
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3"><Label>Automatycznie odświeżaj przy otwartej aplikacji</Label><Switch checked={s.foregroundRefreshEnabled ?? true} onCheckedChange={(v) => update({ foregroundRefreshEnabled: v })} /></div>
-            <Row label="Częstotliwość przy otwartej aplikacji"><Select value={String(s.foregroundRefreshIntervalMs ?? 30000)} onValueChange={(v) => update({ foregroundRefreshIntervalMs: Number(v) as AppSettings["foregroundRefreshIntervalMs"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="0">Ręcznie</SelectItem><SelectItem value="15000">15 sekund</SelectItem><SelectItem value="30000">30 sekund</SelectItem><SelectItem value="60000">60 sekund</SelectItem><SelectItem value="120000">2 minuty</SelectItem></SelectContent></Select></Row>
+            <div className="flex items-center justify-between gap-3"><Label>Automatycznie odświeżaj przy otwartej aplikacji</Label><Switch checked={s.foregroundRefreshEnabled ?? true} onCheckedChange={updateForegroundSwitch} /></div>
+            <Row label="Częstotliwość przy otwartej aplikacji"><Select value={String((s.foregroundRefreshEnabled ?? true) ? (s.foregroundRefreshIntervalMs ?? 30000) : 0)} onValueChange={updateForegroundInterval}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="0">Ręcznie</SelectItem><SelectItem value="15000">15 sekund</SelectItem><SelectItem value="30000">30 sekund</SelectItem><SelectItem value="60000">60 sekund</SelectItem><SelectItem value="120000">2 minuty</SelectItem></SelectContent></Select></Row>
             <Row label="Monitoring w tle"><Select value={s.backgroundMonitoringMode ?? "eco"} onValueChange={(v) => update({ backgroundMonitoringMode: v as AppSettings["backgroundMonitoringMode"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Wyłączony</SelectItem><SelectItem value="eco">Oszczędny — co 5 min, skan 20 s</SelectItem><SelectItem value="normal">Normalny — co 2 min, skan 20 s</SelectItem><SelectItem value="test">Testowy — co 30 s maks. 15 min</SelectItem></SelectContent></Select></Row>
-            <Alert><Info className="h-4 w-4" /><AlertTitle>Monitoring w tle — etap v6.1</AlertTitle><AlertDescription className="text-xs">Opcje są przygotowane. Stabilne działanie w tle w Android APK wymaga Foreground Service ze stałym powiadomieniem, aby Android nie ubijał aplikacji i nie zużywać nadmiernie baterii.</AlertDescription></Alert>
+            <Alert><Info className="h-4 w-4" /><AlertTitle>Monitoring w tle — etap v6.1</AlertTitle><AlertDescription className="text-xs">Monitoring w tle wymaga trybu Android Foreground Service i zostanie wdrożony w v6.1.</AlertDescription></Alert>
           </div>
         </SettingsSection>
 

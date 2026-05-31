@@ -2,10 +2,12 @@
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { Activity, Home, LineChart, Settings } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
-import { useEffect, useState } from "react";
-import { getSettings } from "@/services/storageService";
+import { useEffect, useRef, useState } from "react";
+import { getSensors, getSettings } from "@/services/storageService";
 import { ensureDemoSensors, startDemoLoop, stopDemoLoop } from "@/services/demoService";
-import { useSensors } from "@/hooks/useSensors";
+import { isBleRefreshRunning, useSensors } from "@/hooks/useSensors";
+import { browserAutoRefreshLimitationMessage, setAutoRefreshStatus } from "@/services/autoRefreshService";
+import { isNativeBleAvailable } from "@/services/nativeBleService";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/BrandMark";
 import { APP_NAME, APP_VERSION } from "@/config/app";
@@ -19,8 +21,9 @@ const NAV = [
 
 export function AppShell() {
   const location = useLocation();
-  const { alertSensors } = useSensors();
+  const { alertSensors, listenAll } = useSensors();
   const [mounted, setMounted] = useState(false);
+  const refreshTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const s = getSettings();
@@ -30,6 +33,85 @@ export function AppShell() {
     setMounted(true);
     return () => stopDemoLoop();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const clearTimer = () => {
+      if (refreshTimer.current) {
+        window.clearTimeout(refreshTimer.current);
+        refreshTimer.current = null;
+      }
+    };
+
+    const readRefreshSettings = () => {
+      const settings = getSettings();
+      const intervalMs = settings.foregroundRefreshIntervalMs ?? 30_000;
+      const enabled = Boolean(settings.foregroundRefreshEnabled) && intervalMs > 0;
+      setAutoRefreshStatus({ enabled, intervalMs, scanning: isBleRefreshRunning() });
+      return { enabled, intervalMs };
+    };
+
+    const schedule = () => {
+      clearTimer();
+      const { enabled, intervalMs } = readRefreshSettings();
+      if (!enabled || document.visibilityState !== "visible") {
+        setAutoRefreshStatus({ nextRefreshAt: undefined, scanning: isBleRefreshRunning() });
+        return;
+      }
+      const nextRefreshAt = Date.now() + intervalMs;
+      setAutoRefreshStatus({ nextRefreshAt });
+      refreshTimer.current = window.setTimeout(runRefresh, intervalMs);
+    };
+
+    const runRefresh = async () => {
+      if (cancelled) return;
+      const { enabled, intervalMs } = readRefreshSettings();
+      if (!enabled || document.visibilityState !== "visible") {
+        schedule();
+        return;
+      }
+      if (isBleRefreshRunning()) {
+        setAutoRefreshStatus({
+          scanning: true,
+          lastSkippedAt: new Date().toISOString(),
+          skippedReason: "Pominięto cykl — skan już trwa",
+          nextRefreshAt: Date.now() + intervalMs,
+        });
+        schedule();
+        return;
+      }
+
+      setAutoRefreshStatus({ scanning: true, lastError: undefined, skippedReason: undefined });
+      const ok = await listenAll({ automatic: true, scanSeconds: 15 });
+      if (cancelled) return;
+
+      const hasSensors = getSensors().some((sensor) => !sensor.isDemo);
+      setAutoRefreshStatus({
+        scanning: false,
+        lastRefreshAt: new Date().toISOString(),
+        lastError: !ok && hasSensors && !isNativeBleAvailable() ? browserAutoRefreshLimitationMessage : undefined,
+        nextRefreshAt: Date.now() + intervalMs,
+      });
+      schedule();
+    };
+
+    const handleSettingsChanged = () => schedule();
+    const handleVisibility = () => schedule();
+
+    schedule();
+    window.addEventListener("autosafe:settings-changed", handleSettingsChanged as EventListener);
+    window.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleVisibility);
+    return () => {
+      cancelled = true;
+      clearTimer();
+      setAutoRefreshStatus({ scanning: false, nextRefreshAt: undefined });
+      window.removeEventListener("autosafe:settings-changed", handleSettingsChanged as EventListener);
+      window.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleVisibility);
+    };
+  }, [listenAll]);
 
   if (!mounted) return null;
 

@@ -29,7 +29,11 @@ export function SensorCard({ sensor, onClick, onListen }: Props) {
   const profile = getProfile(sensor.profileId);
   const supportsHumidity = Boolean(profile?.supportsHumidity || sensor.profileId?.toLowerCase().includes("rht") || sensor.lastHumidity != null);
   const Icon = getSensorIcon(sensor);
-  const saved = sensor.lastMeasurementSaveStatus === "saved" ? "zapisano lokalnie" : sensor.lastReadAt ? "czeka na nowy odczyt" : "brak odczytu";
+  const saved = sensor.lastMeasurementSaveStatus === "saved"
+    ? "zapisano lokalnie"
+    : sensor.lastMeasurementSaveStatus === "skipped"
+      ? "bez zmian w historii"
+      : sensor.lastReadAt ? "czeka na nowy odczyt" : "brak odczytu";
 
   return (
     <button onClick={onClick} className="group w-full rounded-2xl border bg-card p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md">

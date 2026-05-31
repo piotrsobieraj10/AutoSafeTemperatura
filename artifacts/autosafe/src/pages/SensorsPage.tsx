@@ -31,7 +31,7 @@ export function SensorsPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div><h1 className="font-display text-3xl font-black">Czujniki</h1><p className="text-sm text-muted-foreground">Kompaktowa lista urządzeń. Kliknij czujnik, aby edytować alarmy, kalibrację i diagnostykę.</p></div>
-        <div className="flex gap-2"><Button variant="outline" onClick={() => listenAll()} disabled={sensors.length === 0}><RefreshCw className="mr-2 h-4 w-4" />Odśwież wszystkie</Button><Button onClick={() => setAddOpen(true)}><Plus className="mr-2 h-4 w-4" />Dodaj</Button></div>
+        <div className="flex gap-2"><Button variant="outline" onClick={() => listenAll({ automatic: false })} disabled={sensors.length === 0}><RefreshCw className="mr-2 h-4 w-4" />Odśwież wszystkie</Button><Button onClick={() => setAddOpen(true)}><Plus className="mr-2 h-4 w-4" />Dodaj</Button></div>
       </div>
 
       {sensors.length === 0 ? <Card><CardContent className="py-14 text-center text-muted-foreground">Brak czujników — kliknij „Dodaj”.</CardContent></Card> : <div className="space-y-3">{grouped.map(({ group, sensors: list }) => { const GroupIcon = getGroupIcon(group); return <Card key={group.id}><CardContent className="p-3"><div className="mb-2 flex items-center gap-2 px-1"><GroupIcon className="h-4 w-4 text-primary" /><h2 className="font-display font-black">{group.name}</h2><Badge variant="outline" className="ml-auto">{list.length}</Badge></div><div className="space-y-2">{list.map((s) => <SensorListItem key={s.id} sensor={s} onOpen={() => { setSelected(s); setDiagnostics(false); }} onRefresh={() => listen(s)} />)}</div></CardContent></Card>; })}</div>}

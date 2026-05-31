@@ -10,6 +10,7 @@
 //   0xFF / Company 0x0757 = bateria z dwóch ostatnich bajtów payloadu jako uint16LE mV
 
 import type { DecodedData, Sensor } from "@/types/sensor";
+import { browserAutoRefreshLimitationMessage } from "./autoRefreshService";
 import { isNativeBleAvailable, reconnectSensorNative, scanForDeviceNative, stopAllNativeBleActivity } from "./nativeBleService";
 import {
   ALL_COMPANY_IDS,
@@ -127,6 +128,11 @@ export interface ScanResult {
   data: DecodedData;
 }
 export type ScanCallback = (r: ScanResult) => void;
+export interface ReconnectOptions {
+  forcePicker?: boolean;
+  automatic?: boolean;
+  scanSeconds?: number;
+}
 
 const nowIso = () => new Date().toISOString();
 
@@ -509,12 +515,12 @@ export const reconnectSensor = async (
   sensor: Sensor,
   onData: ScanCallback,
   onError?: (e: Error) => void,
-  options?: { forcePicker?: boolean }
+  options?: ReconnectOptions
 ): Promise<boolean> => {
   const isElaAdv = sensor.profileId.startsWith("ela-blue-puck") || getProfile(sensor.profileId)?.source === "advertisement";
 
   if (isNativeBleAvailable() && isElaAdv) {
-    return reconnectSensorNative(sensor, onData, onError);
+    return reconnectSensorNative(sensor, onData, onError, { scanSeconds: options?.scanSeconds });
   }
 
   if (isElaAdv && options?.forcePicker) {
@@ -550,8 +556,18 @@ export const reconnectSensor = async (
     const scanned = await startNameBasedElaScan(sensor, onData, onError);
     if (scanned) return true;
 
+    if (options?.automatic) {
+      onError?.(new Error(`WEB_BLE_AUTO_LIMITATION: ${browserAutoRefreshLimitationMessage}`));
+      return false;
+    }
+
     onError?.(new Error(`Automatyczny scan po nazwie nie działa. Awaryjnie wybierz ${sensor.bluetoothName} w oknie Bluetooth.`));
     return requestDeviceAgainAndWatch(sensor, onData, onError);
+  }
+
+  if (options?.automatic) {
+    onError?.(new Error(`WEB_BLE_AUTO_LIMITATION: ${browserAutoRefreshLimitationMessage}`));
+    return false;
   }
 
   return requestDeviceAgainAndWatch(sensor, onData, onError);

@@ -42,6 +42,7 @@ let lastStartAt = 0;
 
 const NAME_PREFIXES = ["P T", "P T EN", "P RHT", "P RHT EN", "BPUCK", "ELA"];
 const SCAN_SECONDS = 75;
+const AUTO_SCAN_SECONDS = 15;
 
 export const isNativeBleAvailable = (): boolean => {
   try {
@@ -105,12 +106,12 @@ const nativeEventToResult = (event: NativeElaAdvertisement, hintProfileId?: stri
   return { device, detectedProfileId: profileId, data };
 };
 
-const ensureNativeScan = async (onError?: (e: Error) => void): Promise<boolean> => {
+const ensureNativeScan = async (onError?: (e: Error) => void, scanSeconds = SCAN_SECONDS): Promise<boolean> => {
   if (!isNativeBleAvailable()) return false;
   try {
     const now = Date.now();
-    if (sharedScanRunning && now - lastStartAt < SCAN_SECONDS * 1000) return true;
-    const result = await AutosafeBle.startScan({ scanSeconds: SCAN_SECONDS, namePrefixes: NAME_PREFIXES });
+    if (sharedScanRunning && now - lastStartAt < scanSeconds * 1000) return true;
+    const result = await AutosafeBle.startScan({ scanSeconds, namePrefixes: NAME_PREFIXES });
     sharedScanRunning = result.active;
     lastStartAt = now;
     return result.active;
@@ -133,7 +134,8 @@ export const stopAllNativeBleActivity = async (): Promise<void> => {
 export const reconnectSensorNative = async (
   sensor: Sensor,
   onData: ScanCallback,
-  onError?: (e: Error) => void
+  onError?: (e: Error) => void,
+  options?: { scanSeconds?: number }
 ): Promise<boolean> => {
   if (!isNativeBleAvailable()) return false;
   const existing = handles.get(sensor.id);
@@ -142,14 +144,14 @@ export const reconnectSensorNative = async (
     handles.delete(sensor.id);
   }
 
-  const handle = await AutosafeBle.addListener("elaAdvertisement", (event) => {
+  const handle = await AutosafeBle.addListener("elaAdvertisement", (event: NativeElaAdvertisement) => {
     if (!matchesSensorName(sensor, event.name) && !matchesSensorName(sensor, event.deviceId) && !matchesSensorName(sensor, event.address)) return;
     const result = nativeEventToResult(event, sensor.profileId);
     onData(result);
   });
   handles.set(sensor.id, handle);
 
-  const ok = await ensureNativeScan(onError);
+  const ok = await ensureNativeScan(onError, options?.scanSeconds ?? SCAN_SECONDS);
   if (ok) {
     onError?.(new Error(`Android APK: odświeżam odczyt natywnym BLE — szukam ${sensor.bluetoothName}.`));
   }
@@ -176,7 +178,7 @@ export const scanForDeviceNative = async (
     }, 12_000);
 
     try {
-      handle = await AutosafeBle.addListener("elaAdvertisement", (event) => {
+      handle = await AutosafeBle.addListener("elaAdvertisement", (event: NativeElaAdvertisement) => {
         const name = event.name ?? "";
         const isEla = /^(P\s*T|P\s*RHT|BPUCK|ELA)/i.test(name);
         if (mode === "ela" && !isEla) return;
@@ -184,7 +186,7 @@ export const scanForDeviceNative = async (
         onData(result);
         // Nie resolve po pierwszej ramce — pokaż listę znalezionych czujników w UI.
       });
-      const ok = await ensureNativeScan(onError);
+      const ok = await ensureNativeScan(onError, mode === "ela" ? AUTO_SCAN_SECONDS : SCAN_SECONDS);
       if (!ok && !resolved) {
         resolved = true;
         window.clearTimeout(timeout);

@@ -5,11 +5,18 @@ import type { DecodedData, Sensor } from "@/types/sensor";
 import { getTempZone } from "@/types/sensor";
 import { addAlert, addMeasurement, deleteSensor as storageDelete, getSensors, getSettings, upsertSensor } from "@/services/storageService";
 import { cacheGrantedDevices, getCachedDevice, reconnectSensor, startAdvWatch, stopAdvWatch, stopNameScan, stopAllBleActivity } from "@/services/bluetoothService";
+import type { ReconnectOptions } from "@/services/bluetoothService";
+import { decodeBleError } from "@/services/bleErrorDecoder";
 import { getProfile } from "@/services/sensorProfiles";
 
 const STALE_MS = 120_000;
 const STATUS_REFRESH_MS = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let bulkRefreshRunning = false;
+
+export const isBleRefreshRunning = () => bulkRefreshRunning;
+
+type ListenAllOptions = ReconnectOptions & { automatic?: boolean };
 
 const applyCalibration = (sensor: Sensor, data: DecodedData): DecodedData => ({
   ...data,
@@ -69,6 +76,7 @@ export function useSensors() {
     if (!current) return;
 
     const data = applyCalibration(current, dataIn);
+    const hasMeasurementFrame = data.temperature !== undefined || data.humidity !== undefined;
     const updated: Sensor = {
       ...current,
       profileId: detectedProfileId && detectedProfileId !== current.profileId ? detectedProfileId : (data.humidity !== undefined ? "ela-blue-puck-rht" : current.profileId),
@@ -86,16 +94,15 @@ export function useSensors() {
       lastTemperatureReadAt: data.temperature !== undefined ? now : current.lastTemperatureReadAt,
       lastHumidityReadAt: data.humidity !== undefined ? now : current.lastHumidityReadAt,
       lastBatteryReadAt: (data.battery !== undefined || data.batteryVoltage !== undefined) ? now : current.lastBatteryReadAt,
-      lastMeasurementSaveStatus: (data.temperature !== undefined || data.humidity !== undefined) ? "saved" : "waiting",
-      lastMeasurementSavedAt: (data.temperature !== undefined || data.humidity !== undefined) ? now : current.lastMeasurementSavedAt,
+      lastMeasurementSaveStatus: hasMeasurementFrame ? "saved" : "waiting",
+      lastMeasurementSavedAt: hasMeasurementFrame ? now : current.lastMeasurementSavedAt,
       status: "connected",
     };
 
-    upsertSensor(updated);
-    maybeCreateAlerts(updated);
+    let savedMeasurement = false;
 
     if (updated.lastTemperature !== undefined || updated.lastHumidity !== undefined) {
-      addMeasurement({
+      savedMeasurement = addMeasurement({
         id: `${current.id}-${Date.now()}`,
         sensorId: current.id,
         roomName: current.roomName,
@@ -109,6 +116,11 @@ export function useSensors() {
         createdAt: now,
       });
     }
+    const finalUpdated = hasMeasurementFrame
+      ? { ...updated, lastMeasurementSaveStatus: savedMeasurement ? "saved" as const : "skipped" as const, lastMeasurementSavedAt: savedMeasurement ? now : current.lastMeasurementSavedAt }
+      : updated;
+    upsertSensor(finalUpdated);
+    maybeCreateAlerts(finalUpdated);
     safeSetSensors();
   }, [maybeCreateAlerts, safeSetSensors]);
 
@@ -209,6 +221,7 @@ export function useSensors() {
   }, [safeSetSensors]);
 
   const listen = useCallback(async (s: Sensor) => {
+    if (bulkRefreshRunning) return false;
     const before = getSensors().find((x) => x.id === s.id) ?? s;
     upsertSensor({ ...before, status: "scanning", bleDebug: `Nasłuch BLE aktywny — szukam ${before.bluetoothName || before.roomName} po nazwie` });
     safeSetSensors();
@@ -216,9 +229,10 @@ export function useSensors() {
     const ok = await reconnectSensor(s, (result) => applyBleData(s.id, result.data, result.detectedProfileId), (e) => {
       const current = getSensors().find((x) => x.id === s.id);
       if (!current) return;
-      const msg = e.message;
+      const decoded = decodeBleError(e);
+      const msg = decoded.technicalDetails;
       const isInfo = msg.includes("Nasłuch") || msg.includes("skan") || msg.includes("Wybrano") || msg.includes("Fallback") || msg.includes("requestLEScan");
-      upsertSensor({ ...current, status: isInfo ? "scanning" : "error", bleDebug: msg });
+      upsertSensor({ ...current, status: isInfo ? "scanning" : "error", bleDebug: isInfo ? msg : `${decoded.title}: ${decoded.userMessage} ${decoded.action}` });
       safeSetSensors();
     }, { forcePicker: true });
 
@@ -230,23 +244,33 @@ export function useSensors() {
     return ok;
   }, [applyBleData, safeSetSensors]);
 
-  const listenAll = useCallback(async () => {
+  const listenAll = useCallback(async (options?: ListenAllOptions) => {
+    if (bulkRefreshRunning) return false;
     const targets = getSensors().filter((s) => !s.isDemo && getProfile(s.profileId)?.source === "advertisement");
     if (!targets.length) return false;
+    bulkRefreshRunning = true;
     targets.forEach((s) => upsertSensor({ ...s, status: "scanning", bleDebug: `Monitoring zbiorczy BLE — szukam ${s.bluetoothName}` }));
     safeSetSensors();
     let any = false;
-    for (const s of targets) {
-      try {
-        const ok = await reconnectSensor(s, (result) => applyBleData(s.id, result.data, result.detectedProfileId), (e) => {
-          const current = getSensors().find((x) => x.id === s.id);
-          if (current && current.status !== "connected") upsertSensor({ ...current, status: "scanning", bleDebug: e.message });
-        }, { forcePicker: false });
-        any = any || ok;
-        await sleep(150);
-      } catch { /* next */ }
+    try {
+      for (const s of targets) {
+        try {
+          const ok = await reconnectSensor(s, (result) => applyBleData(s.id, result.data, result.detectedProfileId), (e) => {
+            const current = getSensors().find((x) => x.id === s.id);
+            if (!current || current.status === "connected") return;
+            const decoded = decodeBleError(e);
+            const technical = decoded.technicalDetails;
+            const isInfo = technical.includes("Nasłuch") || technical.includes("skan") || technical.includes("requestLEScan") || technical.includes("Android APK");
+            upsertSensor({ ...current, status: isInfo ? "scanning" : "error", bleDebug: isInfo ? technical : `${decoded.title}: ${decoded.userMessage} ${decoded.action}` });
+          }, { forcePicker: false, automatic: options?.automatic, scanSeconds: options?.scanSeconds });
+          any = any || ok;
+          await sleep(150);
+        } catch { /* next */ }
+      }
+    } finally {
+      bulkRefreshRunning = false;
+      safeSetSensors();
     }
-    safeSetSensors();
     return any;
   }, [applyBleData, safeSetSensors]);
 
